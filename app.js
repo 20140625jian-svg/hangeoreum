@@ -246,7 +246,7 @@
     Object.assign(b, extra); return b;
   }
   function row(...els) { const d = document.createElement("div"); d.className = "row2"; d.append(...els); return d; }
-  function go(screen) { state.screen = screen; save(); stopNav(); render(); window.scrollTo(0, 0); }
+  function go(screen) { if (screen !== "doctor" && typeof docStopRec === "function") docStopRec(); state.screen = screen; save(); stopNav(); render(); window.scrollTo(0, 0); }
   const replayBtn = () => btn("🔁 다시 듣기", "btn-light", () => speak(state.lastSaid, { force: true }));
   const helpBtn = () => btn("🙋 도움 요청", "btn-help", openHelp);
 
@@ -602,7 +602,7 @@
     }
     main.innerHTML = `<section class="card"><p class="big">처음오신 창구에<br>잘 도착하셨어요. 👏</p>
       <p style="margin-top:12px">번호가 불리면 창구에서 <b>“오늘 예약하고 처음 왔어요”</b> 라고 말씀하세요.</p></section>`;
-    dock.replaceChildren(btn("🏠 처음 화면으로", "btn-xl btn-light", () => resetAll()), row(replayBtn(), helpBtn()));
+    dock.replaceChildren(btn("🩺 진료 받을 때 말씀 받아 적기", "btn-xl btn-talk", openDoctor), row(btn("🏠 처음 화면으로", "btn-light", () => resetAll()), helpBtn()));
     speak("처음오신 창구에 잘 도착하셨어요. 정말 수고 많으셨어요. 번호가 불리면 창구에서, 오늘 예약하고 처음 왔다고 말씀하세요.");
   }
 
@@ -841,12 +841,227 @@
     }
   }
 
+  // ───────────────────────── 진료 말씀 받아 적고 쉽게 요약 ─────────────────────────
+  // 개인정보: 받아 적은 글과 요약은 이 화면에만 있고 저장하거나 서버에 남기지 않습니다. 소리 파일도 만들지 않습니다.
+  const doc = { phase: "intro", finals: [], interim: "", rec: null, wantRec: false, startedAt: 0, timer: null, summary: null, back: "talk" };
+
+  // 어려운 의학 용어 → 쉬운 말
+  const EASY_WORDS = [
+    [/고혈압/g, "고혈압(혈압이 높은 병)"], [/저혈압/g, "저혈압(혈압이 낮은 병)"], [/당뇨(병)?/g, "당뇨(피 속 당이 높은 병)"],
+    [/고지혈증|이상지질혈증/g, "고지혈증(피에 기름이 많은 병)"], [/골다공증/g, "골다공증(뼈가 약해지는 병)"],
+    [/관절염/g, "관절염(뼈마디 염증)"], [/협심증/g, "협심증(심장 혈관이 좁아진 병)"], [/부정맥/g, "부정맥(심장이 불규칙하게 뛰는 병)"],
+    [/공복/g, "빈속"], [/금식/g, "금식(아무것도 먹지 않기)"], [/식후\s*(\d+|삼십|30)\s*분/g, "밥 먹고 $1분 뒤"], [/식후에?/g, "밥 먹고 나서"], [/식전에?/g, "밥 먹기 전에"],
+    [/취침\s*전/g, "자기 전"], [/복용/g, "드시기"], [/투약|투여/g, "약 쓰기"], [/처방/g, "약 받기(처방)"],
+    [/경과\s*관찰/g, "지켜보기"], [/추적\s*검사/g, "다시 하는 검사"], [/재진/g, "다시 오는 진료"], [/외래/g, "외래 진료"],
+    [/부작용/g, "부작용(약 때문에 생기는 불편함)"], [/염증/g, "염증(붓고 열나는 것)"], [/수치/g, "수치(검사 숫자)"],
+    [/혈액\s*검사|채혈/g, "피 검사"], [/소변\s*검사/g, "소변 검사"], [/영상\s*검사/g, "사진 찍는 검사"],
+    [/양성/g, "양성"], [/음성/g, "음성"], [/정상\s*범위/g, "정상"], [/내원/g, "병원에 오기"], [/입원/g, "입원(병원에서 지내기)"],
+    [/시술/g, "시술(간단한 치료)"], [/수술/g, "수술"], [/진통제/g, "진통제(아픈 것 줄이는 약)"], [/항생제/g, "항생제(세균 잡는 약)"],
+    [/소염제/g, "소염제(붓기 줄이는 약)"], [/이뇨제/g, "이뇨제(소변 잘 나오게 하는 약)"], [/혈압약/g, "혈압약"]
+  ];
+  const DOC_CATS = [
+    { key: "medicine", icon: "💊", title: "약 드시는 법", re: /약|복용|드세요|드시|먹|알씩|정씩|캡슐|처방|연고|바르|주사|파스|식후|식전|자기\s*전|아침|저녁|하루\s*(한|두|세|네|\d)/ },
+    { key: "nextVisit", icon: "📅", title: "다음에 오실 때", re: /다음|예약|주\s*뒤|주\s*후|개월|달\s*뒤|다시\s*오|재진|외래|날짜|오세요|오시면/ },
+    { key: "tests", icon: "🧪", title: "검사", re: /검사|혈액|피\s*검사|채혈|엑스레이|x-?ray|씨티|ct|mri|엠알아이|초음파|내시경|소변|심전도|금식/i },
+    { key: "caution", icon: "⚠️", title: "꼭 조심하세요", re: /하지\s*마|마세요|피하|금지|조심|주의|안\s*돼|안\s*됩|술|담배|짜게|무리|넘어지|응급|바로\s*오|119|열이\s*나|숨이|어지러|붓|피가\s*나|부작용/ },
+    { key: "diagnosis", icon: "🩺", title: "선생님 말씀 (몸 상태)", re: /진단|병|염|증|암|혈압|당뇨|수치|결과|괜찮|정상|나빠|좋아|좋아졌|문제|상태|때문/ }
+  ];
+  function splitKo(text) {
+    return text
+      .replace(/\s+/g, " ")
+      .replace(/(습니다|니다|세요|에요|예요|어요|아요|해요|죠|고요|거든요|네요|군요|래요|대요|요)(\s)/g, "$1.$2")
+      .split(/(?<=[.!?])\s+/).map(s => s.replace(/[.]+$/, "").trim()).filter(s => s.length > 3);
+  }
+  function easy(s) { return EASY_WORDS.reduce((t, [re, to]) => t.replace(re, to), s); }
+  function localSummary(text) {
+    const out = { oneLine: "", diagnosis: [], medicine: [], nextVisit: [], tests: [], caution: [], other: [] };
+    const seen = new Set();
+    splitKo(text).forEach(s => {
+      const k = s.replace(/\s/g, ""); if (seen.has(k)) return; seen.add(k);
+      // 한 문장이 여러 칸에 맞으면 더 중요한 칸(조심 > 약 > 다음 진료 > 검사 > 몸 상태) 하나에만 넣음
+      const order = ["caution", "medicine", "nextVisit", "tests", "diagnosis"];
+      let cat = order.find(c => DOC_CATS.find(d => d.key === c).re.test(s));
+      // "검사 결과 보니까…" 처럼 결과를 설명하는 말은 몸 상태로
+      if (cat === "tests" && /결과|보니까|나왔|상태/.test(s) && !/검사\s*(하|할|받|해)/.test(s)) cat = "diagnosis";
+      (out[cat || "other"]).push(easy(s));
+    });
+    const bits = [];
+    if (out.diagnosis.length) bits.push("몸 상태 설명");
+    if (out.medicine.length) bits.push("약 드시는 법");
+    if (out.tests.length) bits.push("검사");
+    if (out.nextVisit.length) bits.push("다음 진료");
+    if (out.caution.length) bits.push("조심할 점");
+    out.oneLine = bits.length ? `오늘 선생님이 ${bits.join(", ")}을 말씀하셨어요.` : "받아 적은 내용을 정리했어요.";
+    out.other = out.other.slice(0, 4);
+    return out;
+  }
+  async function summarize(text) {
+    if (server.ai) {
+      try {
+        const r = await fetch("api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+        if (r.ok) { const j = await r.json(); j.byAI = true; return j; }
+      } catch {}
+    }
+    return localSummary(text);
+  }
+  function summarySpeech(s) {
+    const parts = [s.oneLine];
+    DOC_CATS.slice().reverse().forEach(c => { if (s[c.key] && s[c.key].length) parts.push(`${c.title.replace(/\s*\(.*\)/, "")}. ${s[c.key].join(". ")}.`); });
+    return parts.join(" ").replace(/\(([^)]*)\)/g, ", $1,");
+  }
+  const docText = () => (doc.finals.join(" ") + " " + doc.interim).trim();
+
+  function docStartRec() {
+    if (!SR || !isSecureContext) { doc.phase = "type"; return renderDoctor(); }
+    stopSpeaking();
+    doc.wantRec = true;
+    const startOne = () => {
+      if (!doc.wantRec) return;
+      const rec = new SR();
+      rec.lang = "ko-KR"; rec.continuous = true; rec.interimResults = true;
+      rec.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) doc.finals.push(r[0].transcript.trim()); else interim += r[0].transcript;
+        }
+        doc.interim = interim; paintLive();
+      };
+      rec.onerror = (e) => {
+        if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+          doc.wantRec = false; doc.micError = e.error;
+        }
+      };
+      // 휴대폰은 조용하면 듣기를 멈추므로, "다 들었어요"를 누를 때까지 다시 켭니다
+      rec.onend = () => {
+        if (doc.interim) { doc.finals.push(doc.interim.trim()); doc.interim = ""; }
+        doc.rec = null;
+        if (doc.wantRec) setTimeout(startOne, 250);
+        else if (doc.micError) { doc.phase = "type"; renderDoctor(); }
+      };
+      doc.rec = rec;
+      try { rec.start(); } catch { doc.wantRec = false; doc.phase = "type"; renderDoctor(); }
+    };
+    doc.phase = "rec"; doc.startedAt = Date.now(); doc.micError = "";
+    renderDoctor();
+    startOne();
+    clearInterval(doc.timer);
+    doc.timer = setInterval(() => { const t = $("#recTime"); if (t) { const s = Math.floor((Date.now() - doc.startedAt) / 1000); t.textContent = `${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, "0")}초`; } }, 1000);
+    if (navigator.wakeLock) navigator.wakeLock.request("screen").then(l => doc.wake = l).catch(() => {});
+  }
+  function docStopRec() {
+    doc.wantRec = false; clearInterval(doc.timer);
+    if (doc.rec) { try { doc.rec.stop(); } catch {} }
+    if (doc.wake) { doc.wake.release().catch(() => {}); doc.wake = null; }
+  }
+  function paintLive() {
+    const el = $("#liveText"); if (!el) return;
+    el.innerHTML = esc(doc.finals.join(" ")) + (doc.interim ? ` <span class="interim">${esc(doc.interim)}</span>` : "") || '<span class="muted">말씀을 기다리는 중…</span>';
+    el.scrollTop = el.scrollHeight;
+  }
+  async function docFinish() {
+    docStopRec();
+    await new Promise(r => setTimeout(r, 400));
+    const text = docText();
+    if (!text) { speak("받아 적은 말씀이 없어요. 다시 해 볼까요?"); doc.phase = "intro"; return renderDoctor(); }
+    doc.phase = "summary"; doc.summary = null; renderDoctor();
+    doc.summary = await summarize(text);
+    renderDoctor();
+  }
+
+  function renderDoctor() {
+    setStep("🩺 진료 내용 쉽게 듣기", doc.phase === "rec" ? "받아 적는 중" : doc.phase === "summary" ? "쉬운 말 정리" : "");
+    const backBtn = btn("⬅ 돌아가기", "btn-light", () => { docStopRec(); go(doc.back || "talk"); });
+
+    if (doc.phase === "intro") {
+      main.innerHTML = `
+        <section class="card">
+          <p class="big">선생님 말씀을 받아 적어<br>쉬운 말로 정리해 드려요.</p>
+          <p class="muted" style="margin-top:10px">진료실에서 휴대폰을 책상 위에 올려 두세요.</p>
+        </section>
+        <section class="help-mini">
+          <p class="help-small">선생님께 먼저 보여 드리세요</p>
+          <p class="help-q">“선생님 말씀을 휴대폰으로 받아 적어서 쉽게 다시 보려고 해요. 괜찮을까요?”</p>
+        </section>
+        <p class="muted">🔒 소리 파일은 만들지 않고, 받아 적은 글은 이 화면을 닫으면 사라져요.</p>`;
+      dock.replaceChildren(
+        btn("🎙 받아 적기 시작", "btn-xl btn-talk", docStartRec),
+        row(btn("⌨️ 직접 쓰기", "btn-light", () => { doc.phase = "type"; renderDoctor(); }), backBtn)
+      );
+      return speak("선생님 말씀을 받아 적어서, 쉬운 말로 정리해 드릴게요. 먼저 선생님께 화면을 보여 드리고, 괜찮다고 하시면 노란 버튼을 눌러 주세요.");
+    }
+
+    if (doc.phase === "rec") {
+      main.innerHTML = `
+        <section class="card rec-card">
+          <p class="rec-dot">● 받아 적는 중 <span id="recTime">0분 00초</span></p>
+          <div id="liveText" class="live-text"></div>
+        </section>
+        <p class="muted">말씀이 끝나면 아래 빨간 버튼을 눌러 주세요.</p>`;
+      paintLive();
+      dock.replaceChildren(btn("⏹ 다 들었어요 · 정리하기", "btn-xl btn-stop", docFinish), row(btn("✖ 취소", "btn-light", () => { docStopRec(); doc.finals = []; doc.interim = ""; doc.phase = "intro"; renderDoctor(); })));
+      return;
+    }
+
+    if (doc.phase === "type") {
+      main.innerHTML = `
+        <section class="card">
+          ${doc.micError ? `<p class="muted">바로 받아 적기가 안 돼서 다른 방법으로 할게요.</p>` : ""}
+          <p class="big" style="font-size:24px">아래 칸을 누르고 키보드의 <span class="kbd">🎤</span> 버튼을 누른 채로 두면, 선생님 말씀이 글로 적혀요.</p>
+          <p class="muted" style="margin-top:6px">약 봉투나 안내문 내용을 써도 돼요.</p>
+        </section>
+        <textarea id="docBox" rows="7" placeholder="예) 혈압약은 하루 한 번 아침 식후에 드세요. 다음 주에 피 검사하니까 그날은 공복으로 오세요.">${esc(docText())}</textarea>`;
+      const box = $("#docBox");
+      dock.replaceChildren(
+        btn("📝 쉬운 말로 정리하기", "btn-xl btn-primary", () => { doc.finals = [box.value]; doc.interim = ""; docFinish(); }),
+        row(btn("🎙 바로 받아 적기", "btn-light", docStartRec), backBtn)
+      );
+      return;
+    }
+
+    // summary
+    const s = doc.summary;
+    if (!s) { main.innerHTML = `<section class="card"><p class="big">정리하는 중이에요…</p></section>`; dock.replaceChildren(); return; }
+    const sec = (c) => (s[c.key] && s[c.key].length) ? `
+      <section class="card sum-${c.key}">
+        <p class="sum-title">${c.icon} ${c.title}</p>
+        <ul class="sum-list">${s[c.key].map(x => `<li>${esc(x)}</li>`).join("")}</ul>
+      </section>` : "";
+    main.innerHTML = `
+      <section class="card"><p class="big" style="font-size:26px">${esc(s.oneLine || "")}</p></section>
+      ${["caution", "medicine", "nextVisit", "tests", "diagnosis"].map(k => sec(DOC_CATS.find(d => d.key === k))).join("")}
+      ${s.other && s.other.length ? sec({ key: "other", icon: "📝", title: "그 밖의 말씀" }) : ""}
+      <p class="sign" style="font-size:18px">ℹ️ ${s.byAI ? "AI가" : "휴대폰이 자동으로"} 정리한 거라 틀릴 수 있어요. <b>약과 날짜는 꼭 약 봉투와 안내문, 또는 선생님께 다시 확인하세요.</b></p>
+      <details class="card"><summary>받아 적은 말씀 전체 보기</summary><p style="margin:10px 0 0;font-size:19px">${esc(docText())}</p></details>`;
+    const speakAll = () => speak(summarySpeech(s), { force: true });
+    const shareBtn = btn("📤 가족에게 보내기", "btn-light", async () => {
+      const txt = `[병원한걸음 진료 메모]\n${s.oneLine}\n` + ["caution", "medicine", "nextVisit", "tests", "diagnosis", "other"]
+        .filter(k => s[k] && s[k].length).map(k => { const c = DOC_CATS.find(d => d.key === k) || { icon: "📝", title: "그 밖의 말씀" }; return `\n${c.icon} ${c.title}\n- ${s[k].join("\n- ")}`; }).join("\n")
+        + "\n\n※ 자동 정리라 틀릴 수 있어요. 약·날짜는 꼭 다시 확인하세요.";
+      try {
+        if (navigator.share) await navigator.share({ title: "진료 메모", text: txt });
+        else { await navigator.clipboard.writeText(txt); speak("복사했어요. 문자나 카카오톡에 붙여 넣어 보내세요.", { force: true }); }
+      } catch {}
+    });
+    dock.replaceChildren(
+      btn("🔊 정리한 내용 들려주기", "btn-xl btn-primary", speakAll),
+      row(shareBtn, btn("🗑 지우고 새로", "btn-light", () => { doc.finals = []; doc.interim = ""; doc.summary = null; doc.phase = "intro"; renderDoctor(); }))
+    );
+    main.append(backBtn);
+    speakAll();
+  }
+  function openDoctor() {
+    if (state.screen !== "doctor") doc.back = state.screen;
+    if (doc.phase === "rec") doc.phase = "intro";
+    go("doctor");
+  }
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
-    ({ perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    ({ doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
@@ -857,7 +1072,7 @@
 
   // ───────────────────────── 상단 버튼 / 설정 ─────────────────────────
   const soundBtn = $("#btnSound");
-  function paintSound() { soundBtn.textContent = state.sound ? "🔊 소리 켬" : "🔇 소리 끔"; soundBtn.setAttribute("aria-pressed", state.sound); }
+  function paintSound() { soundBtn.textContent = state.sound ? "🔊" : "🔇"; soundBtn.setAttribute("aria-label", state.sound ? "소리 켜짐 (누르면 끔)" : "소리 꺼짐 (누르면 켬)"); soundBtn.setAttribute("aria-pressed", state.sound); }
   soundBtn.onclick = () => { state.sound = !state.sound; if (!state.sound) stopSpeaking(); save(); paintSound(); };
   paintSound();
 
@@ -866,6 +1081,7 @@
     $("#engineInfo").textContent =
       `말 알아듣기: ${server.ai ? "AI(GPT) 해석" : "기기 안 규칙 해석"} · 목소리: ${server.tts ? "AI 자연 음성 사용 가능" : "기기 내장 한국어 음성"} · 음성 인식: ${SR ? "사용 가능" : "지원 안 됨"}`;
   }
+  $("#btnDoctor").onclick = openDoctor;
   $("#btnSettings").onclick = () => {
     $("#rateInput").value = state.rate; $("#rateVal").textContent = state.rate.toFixed(2) + "배";
     $("#demoToggle").checked = state.demo; $("#reduceMotion").checked = state.reduce;

@@ -161,3 +161,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #typeBox { width: 100%; font-size: 24px; padding: 14px; border-radius: 16px; border: 3px solid var(--primary); background: var(--bg); color: var(--ink); font-family: inherit; }
 .kbd { display: inline-block; border: 2px solid var(--line); border-radius: 10px; padding: 0 8px; background: var(--bg); }
 .btn small { font-size: 16px; font-weight: 600; opacity: .9; }
+
+/* 진료 메모 */
+.help-mini { background: #fff8d6; color: #111; border-radius: var(--radius); padding: 18px; border: 2px solid #f0d98a; }
+.help-q { font-size: 26px; font-weight: 800; margin: 6px 0 0; line-height: 1.45; }
+.rec-dot { margin: 0 0 10px; font-weight: 800; color: var(--danger); display: flex; justify-content: space-between; }
+.rec-dot span { color: var(--muted); font-weight: 600; }
+.live-text { min-height: 220px; max-height: 45dvh; overflow: auto; font-size: 22px; line-height: 1.6; }
+.live-text .interim { color: var(--muted); }
+.btn-stop { background: var(--danger); color: #fff; }
+#docBox { width: 100%; font-size: 21px; padding: 14px; border-radius: 16px; border: 3px solid var(--primary); background: var(--card); color: var(--ink); font-family: inherit; }
+.sum-title { font-size: 24px; font-weight: 900; margin: 0 0 6px; }
+.sum-list { margin: 0; padding-left: 24px; font-size: 22px; line-height: 1.55; }
+.sum-list li + li { margin-top: 8px; }
+.sum-caution { border-color: #f2b5aa; background: #fff1ee; }
+.sum-medicine { border-color: #9fd8c5; }
+@media (prefers-color-scheme: dark) { .sum-caution { background: #3a1f1b; } }
+details summary { font-size: 19px; cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.top-actions .chip { padding: 0 12px; font-size: 17px; white-space: nowrap; min-width: 48px; }
+.brand { white-space: nowrap; }

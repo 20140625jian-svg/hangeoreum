@@ -29,6 +29,15 @@ PARSE_PROMPT = """너는 병원에 혼자 가는 어르신의 말을 정리하�
 - reception: 병원 접수·수납을 도와줄 사람이 필요하면 true, 혼자 한다면 false
 추측하지 말고, 확실하지 않으면 null로 둬. 다른 설명은 쓰지 마."""
 
+SUMMARY_PROMPT = """너는 진료실에서 의사 선생님 말씀을 받아 적은 글을 어르신이 알아듣기 쉽게 정리하는 도우미야.
+규칙:
+- 받아 적은 글에 있는 내용만 쓰고, 없는 약 이름·용량·날짜·진단은 절대 지어내지 마.
+- 초등학생도 알아듣는 짧은 존댓말 문장으로. 어려운 의학 용어는 쉬운 말로 풀고 괄호에 원래 말을 남겨.
+- 약 이름, 숫자, 횟수, 시간(아침/식후 등), 날짜는 그대로 정확히.
+- 음성 인식 오류로 보이는 부분은 추측해서 고치지 말고 빼.
+JSON으로만 답해: {"oneLine": 한 문장 요약, "diagnosis": [몸 상태], "medicine": [약 먹는 법], "nextVisit": [다음 진료], "tests": [검사], "caution": [조심할 것], "other": [기타]}
+각 배열은 없으면 빈 배열."""
+
 TTS_STYLE = ("천천히, 또박또박, 따뜻하고 다정한 말투로 어르신께 길을 알려 주듯 한국어로 말하세요. "
              "문장 사이에 살짝 쉬고, 숫자와 버스 번호는 분명하게 읽으세요.")
 
@@ -69,7 +78,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(min(n, 10000)) or b"{}")
-            text = str(body.get("text", ""))[:600]
+            text = str(body.get("text", ""))[:8000]
             if not text:
                 return self._json(400, {"error": "text 없음"})
 
@@ -90,6 +99,21 @@ class Handler(SimpleHTTPRequestHandler):
                     ("보행기", "휠체어", "지팡이", "걷기 힘듦", "도움 필요 없음") else None,
                     "reception": out.get("reception") if isinstance(out.get("reception"), bool) else None,
                 }
+                return self._json(200, clean)
+
+            if self.path == "/api/summary":
+                res = openai("chat/completions", {
+                    "model": "gpt-4o-mini",
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                    "messages": [{"role": "system", "content": SUMMARY_PROMPT},
+                                 {"role": "user", "content": text}],
+                })
+                out = json.loads(res["choices"][0]["message"]["content"])
+                clean = {"oneLine": str(out.get("oneLine") or "")[:200]}
+                for k in ("diagnosis", "medicine", "nextVisit", "tests", "caution", "other"):
+                    v = out.get(k) or []
+                    clean[k] = [str(x)[:300] for x in v if isinstance(x, (str, int, float))][:8] if isinstance(v, list) else []
                 return self._json(200, clean)
 
             if self.path == "/api/tts":
