@@ -107,7 +107,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: radial-gradient(circle, var(--card) 60%, var(--bg) 61%);
   border: 4px solid var(--line); position: relative; display: grid; place-items: center;
 }
-.arrow { width: 62%; height: 62%; transition: transform .35s ease-out; }
+.arrow { width: 62%; height: 62%; transition: transform .12s linear; position: relative; z-index: 1; will-change: transform; }
 .reduce .arrow { transition: none; }
 .arrow path { fill: var(--primary); }
 .dist { font-size: 40px; font-weight: 900; }
@@ -219,3 +219,13 @@ a.btn { text-decoration: none; color: inherit; }
 .bus-row small { font-size: 17px; color: var(--muted); }
 .bus-alt { font-size: 19px; margin-top: 8px !important; padding-top: 8px; border-top: 1px dashed var(--line); }
 .low { color: #1a5fb4; font-weight: 800; }
+
+/* 나침반 고리: 휴대폰을 돌리면 북·동·남·서가 같이 돌아감 */
+.ring { position: absolute; inset: 6px; border-radius: 50%; transition: transform .12s linear; }
+.ring b { position: absolute; font-size: 17px; font-weight: 900; color: var(--muted); }
+.ring .n { top: 2px; left: 50%; transform: translateX(-50%); color: #d62d20; }
+.ring .s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.ring .e { right: 6px; top: 50%; transform: translateY(-50%); }
+.ring .w { left: 6px; top: 50%; transform: translateY(-50%); }
+.compass-state { font-size: 16px; color: var(--warn); font-weight: 700; }
+.compass-state.on { color: var(--ok); }

@@ -8,7 +8,7 @@
 // 그다음 config.js 의 apiBase 에 나온 주소(https://hangeoreum-api.<계정>.workers.dev)를 넣으세요.
 
 const NMC = "https://apis.data.go.kr/B552657";
-const ALLOW_ORIGIN = "https://20140625jian-svg.github.io";
+const ALLOW_ORIGINS = ["https://20140625jian-svg.github.io", "http://localhost:8000"];
 
 function items(xml) {
   const code = (xml.match(/<resultCode>([^<]*)</) || [])[1];
@@ -74,7 +74,8 @@ async function busArrival(env, stationId) {
 
 export default {
   async fetch(req, env) {
-    const cors = { "Access-Control-Allow-Origin": ALLOW_ORIGIN, "Content-Type": "application/json; charset=utf-8" };
+    const origin = req.headers.get("Origin") || "";
+    const cors = { "Access-Control-Allow-Origin": ALLOW_ORIGINS.includes(origin) ? origin : ALLOW_ORIGINS[0], "Vary": "Origin", "Content-Type": "application/json; charset=utf-8" };
     const u = new URL(req.url);
     if (u.pathname === "/api/health") return new Response(JSON.stringify({ data: !!env.DATA_GO_KR_KEY, bus: !!env.DATA_GO_KR_KEY }), { headers: cors });
     if (u.pathname === "/api/bus") {

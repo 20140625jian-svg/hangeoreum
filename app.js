@@ -423,7 +423,9 @@
       if (nav.heading == null) nav.heading = h;
       else nav.heading = (nav.heading + norm180(h - nav.heading) * 0.25 + 360) % 360;
       nav.headingAt = Date.now();
-      updateNavUI();
+      nav.compassLive = true;
+      if (!nav.raf) nav.raf = requestAnimationFrame(() => { nav.raf = 0; paintArrow(); });
+      if (Date.now() - (nav.fullAt || 0) > 1000) { nav.fullAt = Date.now(); updateNavUI(); }
     };
     nav.orientHandler = handler;
     if ("ondeviceorientationabsolute" in window) window.addEventListener("deviceorientationabsolute", handler);
@@ -474,14 +476,13 @@
     if (nav.watchId != null) navigator.geolocation.clearWatch(nav.watchId);
     nav.watchId = null; clearInterval(nav.demoTimer); nav.demoTimer = null;
     if (typeof stopBus === "function") stopBus();
-    stopCompass();
   }
   function setGpsStatus(t, bad) { const el = $("#gpsStatus"); if (el) { el.textContent = t; el.classList.toggle("bad", !!bad); } }
 
   function renderOutdoor() {
     const i = state.outIdx, step = RT().outdoor[i];
     if (!step) return go(RT().indoor.length ? "indoor" : "done");
-    nav.arrived = false; nav.nearSaid = false; nav.lastDirWord = ""; nav.lastDirSpokeAt = 0;
+    nav.arrived = false; nav.nearSaid = false; nav.lastDirWord = ""; nav.lastDirSpokeAt = 0; nav.arrowDeg = null; nav.ringDeg = null;
     setStep(`2. 가는 길 ${i + 1}/${RT().outdoor.length}`, step.type === "bus" ? "버스 타기" : "걷기");
     main.innerHTML = `
       <div class="progress">${RT().outdoor.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
@@ -492,10 +493,12 @@
       ${step.bus ? '<section class="card bus-card" id="busCard" hidden aria-live="polite"></section>' : ""}
       <section class="card compass-wrap">
         <div class="compass">
+          <div class="ring" id="ring" aria-hidden="true"><b class="n">북</b><b class="e">동</b><b class="s">남</b><b class="w">서</b></div>
           <svg class="arrow" id="arrow" viewBox="0 0 100 100" aria-hidden="true">
             <path d="M50 4 L86 56 L62 56 L62 96 L38 96 L38 56 L14 56 Z"/>
           </svg>
         </div>
+        <div class="compass-state" id="compassState"></div>
         <div class="dir-word" id="dirWord">위치를 찾는 중…</div>
         <div class="dist" id="dist">–</div>
         <div class="gps-status" id="gpsStatus">GPS 연결 중</div>
@@ -518,24 +521,60 @@
     const needsTap = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
     if (needsTap && !nav.sensorAsked) {
       const sb = $("#sensorBtn"); sb.hidden = false;
-      sb.onclick = async () => { nav.sensorAsked = true; sb.hidden = true; if (await askSensorPermission()) startCompass(); };
+      sb.onclick = async () => { sb.hidden = true; if (nav.orientHandler || nav.sensorAsked) return; nav.sensorAsked = true; const ok = await askSensorPermission(); nav.sensorAsked = true; perm.compass = ok ? "granted" : "denied"; if (ok) startCompass(); paintArrow(); };
     } else startCompass();
     startGPS();
     speak(step.voice);
+    updateNavUI();
     // 3초 뒤에도 나침반 값이 없으면 지도 기준(북쪽=위) 화살표로 안내
     setTimeout(() => { if (state.screen === "outdoor") updateNavUI(); }, 3000);
   }
 
+  // GPS가 아직 없으면 직전 지점에 있다고 가정해서라도 방향을 보여 줌
+  function guessPos() {
+    if (nav.pos) return nav.pos;
+    const prev = RT().outdoor[state.outIdx - 1];
+    return prev ? { lat: prev.lat, lng: prev.lng, guessed: true } : null;
+  }
+  function paintArrow() {
+    if (state.screen !== "outdoor") return;
+    const step = RT().outdoor[state.outIdx], arrow = $("#arrow"); if (!step || !arrow) return;
+    const compassOk = nav.heading != null && Date.now() - nav.headingAt < 4000;
+    const ring = $("#ring");
+    if (ring) {
+      const target = compassOk ? -nav.heading : 0;
+      nav.ringDeg = nav.ringDeg == null ? target : nav.ringDeg + norm180(target - nav.ringDeg);
+      ring.style.transform = `rotate(${nav.ringDeg}deg)`;
+    }
+    const p = guessPos();
+    if (!p) return;
+    const b = bearing(p, step);
+    const rel = compassOk ? norm180(b - nav.heading) : norm180(b);
+    // 359°→0° 를 넘을 때 한 바퀴 거꾸로 도는 것 방지: 각도를 누적
+    nav.arrowDeg = nav.arrowDeg == null ? rel : nav.arrowDeg + norm180(rel - nav.arrowDeg);
+    arrow.style.transform = `rotate(${nav.arrowDeg}deg)`;
+    const st = $("#compassState");
+    if (st) {
+      st.innerHTML = compassOk ? "🧭 휴대폰 방향을 따라 돌아요"
+        : nav.compassLive ? "🧭 방향 센서 연결 중…"
+        : perm.compass === "denied" ? (isIOS ? "🧭 방향 센서가 꺼져 있어요<br><small>설정 → 앱 → Safari → ‘동작 및 방향 접근’ 켜고 새로고침</small>" : "🧭 방향 센서가 꺼져 있어요 — 위쪽이 북쪽")
+        : "🧭 방향 센서 꺼짐 — 위쪽이 북쪽";
+      st.classList.toggle("on", compassOk);
+    }
+    return rel;
+  }
   function updateNavUI() {
     if (state.screen !== "outdoor") return;
     const step = RT().outdoor[state.outIdx]; if (!step) return;
     const arrow = $("#arrow"); if (!arrow) return;
-    if (!nav.pos) { $("#dirWord").textContent = "위치를 찾는 중…"; return; }
+    const rel = paintArrow();
+    if (!nav.pos) {
+      $("#dirWord").textContent = guessPos() ? "위치 찾는 중 · 대략 이쪽이에요" : "위치를 찾는 중…";
+      return;
+    }
     updateMiniMap(step);
-    const d = distanceM(nav.pos, step), b = bearing(nav.pos, step);
+    const d = distanceM(nav.pos, step);
     const compassOk = nav.heading != null && Date.now() - nav.headingAt < 4000;
-    const rel = compassOk ? norm180(b - nav.heading) : norm180(b);
-    arrow.style.transform = `rotate(${rel}deg)`;
     $("#dist").textContent = distText(d);
 
     const weak = nav.acc != null && nav.acc > 45;
@@ -691,9 +730,10 @@
     const allOn = perm.loc === "granted" && (perm.mic === "granted" || !SR);
     const all = btn("✨ 한 번에 모두 켜기", "btn-xl btn-talk", async () => {
       all.textContent = "확인 중…";
+      const cp = needCompass ? requestCompass() : null;   // 아이폰은 누른 순간에 물어봐야 해서 맨 먼저
+      if (cp) { perm.compass = await cp; if (perm.compass === "granted") startCompass(); }
       perm.loc = await requestLocation();
       perm.mic = await requestMic();
-      if (needCompass) { perm.compass = await requestCompass(); if (perm.compass === "granted") startCompass(); }
       speak(perm.loc === "granted" && perm.mic === "granted" ? "모두 켜졌어요. 다음 버튼을 눌러 주세요." : "꺼진 것이 있어요. 화면의 방법대로 켜 주세요.");
       renderPerm();
     });
@@ -1311,6 +1351,22 @@
     if (e.target.closest("button, select, input")) return;
     if (synth && !synth.speaking && state.lastSaid && state.sound) setTimeout(() => { if (!synth.speaking) speak(state.lastSaid); }, 50);
   }, { once: false, capture: true });
+
+  const iosNeedsCompassTap = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
+  if (!iosNeedsCompassTap) startCompass();
+  else {
+    const askOnTap = () => {
+      if (nav.orientHandler || nav.sensorAsked) return;
+      nav.sensorAsked = true;
+      DeviceOrientationEvent.requestPermission().then(r => {
+        perm.compass = r === "granted" ? "granted" : "denied";
+        if (r === "granted") { startCompass(); const sb = $("#sensorBtn"); if (sb) sb.hidden = true; }
+        paintArrow();
+      }).catch(() => { nav.sensorAsked = false; });
+    };
+    document.addEventListener("click", askOnTap, true);
+    document.addEventListener("touchend", askOnTap, true);
+  }
 
   render();
 })();
