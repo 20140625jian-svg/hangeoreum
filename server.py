@@ -13,11 +13,31 @@
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_env():
+    """같은 폴더의 .env 파일(KEY=값)을 환경변수로 읽기. 이 파일은 GitHub에 올라가지 않습니다."""
+    path = os.path.join(ROOT, ".env")
+    if not os.path.exists(path):
+        return
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+load_env()
 KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+# 공공데이터포털 인증키 (Encoding 키를 넣어도 자동으로 풀어서 씀)
+DATA_KEY = urllib.parse.unquote(os.environ.get("DATA_GO_KR_KEY", "").strip())
+NMC = "https://apis.data.go.kr/B552657"
 PORT = int(os.environ.get("PORT", "8000"))
 TTS_VOICE = os.environ.get("TTS_VOICE", "coral")
 
@@ -53,6 +73,56 @@ def openai(path, payload, raw=False):
     return body if raw else json.loads(body)
 
 
+def data_go(path, params):
+    """공공데이터 API 호출 → item 목록(dict)"""
+    qs = urllib.parse.urlencode({"serviceKey": DATA_KEY, **params})
+    with urllib.request.urlopen(f"{NMC}/{path}?{qs}", timeout=15) as r:
+        root = ET.fromstring(r.read())
+    code = root.findtext(".//resultCode") or root.findtext(".//returnReasonCode")
+    if code not in (None, "00", "0000"):
+        raise RuntimeError(f"공공데이터 오류 {code}: {root.findtext('.//resultMsg') or root.findtext('.//returnAuthMsg') or ''}")
+    return [{c.tag: (c.text or "").strip() for c in it} for it in root.iter("item")]
+
+
+def hhmm(v):
+    return f"{v[:2]}:{v[2:]}" if v and len(v) == 4 and v.isdigit() else ""
+
+
+def near_hospitals(kind, lat, lng):
+    op = "ErmctInfoInqireService/getEgytLcinfoInqire" if kind == "er" else "HsptlAsembySearchService/getHsptlMdcncLcinfoInqire"
+    items = data_go(op, {"WGS84_LON": lng, "WGS84_LAT": lat, "pageNo": 1, "numOfRows": 15})
+    out = []
+    for it in items:
+        try:
+            out.append({
+                "id": it.get("hpid", ""), "name": it.get("dutyName", ""), "addr": it.get("dutyAddr", ""),
+                "tel": it.get("dutyTel1", ""), "kind": it.get("dutyDivName", ""),
+                "lat": float(it["latitude"]), "lng": float(it["longitude"]),
+                "open": hhmm(it.get("startTime", "")), "close": hhmm(it.get("endTime", "")),
+                "er": kind == "er",
+            })
+        except (KeyError, ValueError):
+            continue
+    if kind == "er" and out:
+        # 응급실 실시간 빈 침대 (가능할 때만 붙임)
+        try:
+            parts = out[0]["addr"].split()
+            beds = data_go("ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire",
+                           {"STAGE1": parts[0], "STAGE2": parts[1], "pageNo": 1, "numOfRows": 50})
+            by = {b.get("hpid"): b for b in beds}
+            for h in out:
+                b = by.get(h["id"])
+                if b and b.get("hvec", "").lstrip("-").isdigit():
+                    h["beds"] = max(0, int(b["hvec"]))
+                    t = b.get("hvidate", "")
+                    h["bedsAt"] = f"{t[8:10]}:{t[10:12]} 기준" if len(t) >= 12 else ""
+                    if b.get("dutyTel3"):
+                        h["erTel"] = b["dutyTel3"]
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
@@ -67,10 +137,26 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/api/health"):
-            return self._json(200, {"ai": bool(KEY), "tts": bool(KEY)})
-        if self.path.startswith("/server.py"):
+            return self._json(200, {"ai": bool(KEY), "tts": bool(KEY), "data": bool(DATA_KEY)})
+        if self.path.startswith("/api/near"):
+            return self.near()
+        if self.path.startswith(("/server.py", "/.env", "/worker.js")):
             return self.send_error(404)
         return super().do_GET()
+
+    def near(self):
+        if not DATA_KEY:
+            return self._json(503, {"error": "DATA_GO_KR_KEY 없음"})
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        try:
+            lat, lng = float(q["lat"][0]), float(q["lng"][0])
+        except (KeyError, ValueError):
+            return self._json(400, {"error": "lat, lng 필요"})
+        kind = q.get("type", ["hosp"])[0]
+        try:
+            return self._json(200, {"items": near_hospitals(kind, lat, lng)})
+        except Exception as e:  # noqa: BLE001
+            return self._json(502, {"error": str(e)[:200]})
 
     def do_POST(self):
         if not KEY:
@@ -140,5 +226,5 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"병원한걸음: http://localhost:{PORT}  (AI {'켜짐' if KEY else '꺼짐 — 기기 안 규칙/목소리 사용'})")
+    print(f"병원한걸음: http://localhost:{PORT}  (AI {'켜짐' if KEY else '꺼짐'} · 공공데이터 {'켜짐' if DATA_KEY else '꺼짐 — OpenStreetMap 사용'})")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

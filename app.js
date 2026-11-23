@@ -54,9 +54,9 @@
   // ───────────────────────── 서버(선택) 확인 ─────────────────────────
   // server.py 를 OPENAI_API_KEY 와 함께 실행하면 AI 해석과 자연스러운 AI 목소리를 씁니다.
   // 서버가 없으면 브라우저 안에서 규칙 기반 해석 + 기기 내장 한국어 목소리로 동작합니다.
-  const server = { ai: false, tts: false };
+  const server = { ai: false, tts: false, data: false };
   fetch("api/health").then(r => r.ok ? r.json() : null).then(j => {
-    if (j) { server.ai = !!j.ai; server.tts = !!j.tts; }
+    if (j) { server.ai = !!j.ai; server.tts = !!j.tts; server.data = !!j.data; }
     updateEngineInfo();
   }).catch(() => updateEngineInfo());
 
@@ -284,7 +284,9 @@
           <button class="btn btn-light" data-q="분당서울대병원 처음 가요. 보행기 쓰고 접수도 도와주세요">보행기 · 첫 방문</button>
           <button class="btn btn-light" data-q="분당서울대병원 처음 가요. 휠체어 타고 접수도 도와주세요">휠체어 · 첫 방문</button>
         </div>
-      </section>`;
+      </section>
+      <div class="row2"><button class="btn btn-light" id="goNearH">🏥 가까운 병원</button><button class="btn btn-light" id="goNearE">🚑 가까운 응급실</button></div>`;
+    $("#goNearH").onclick = () => openNear("hosp"); $("#goNearE").onclick = () => openNear("er");
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
     const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk));
     dock.replaceChildren(talk, row(btn("⌨️ 키보드로 말하기", "btn-light", () => typeFallback(handleUtterance)), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
@@ -741,7 +743,9 @@
       <div id="results" class="results"></div>
       <div id="pickMap" class="map" aria-label="목적지를 고르는 지도"></div>
       <section class="card" id="pickInfo"><p class="muted">아직 고르지 않았어요.</p></section>
-      <button class="btn btn-light" id="presetBtn">🏥 분당서울대병원 (미금역에서 출발 · 확인된 경로)</button>`;
+      <button class="btn btn-light" id="presetBtn">🏥 분당서울대병원 (미금역에서 출발 · 확인된 경로)</button>
+      <button class="btn btn-light" id="nearBtn">📍 내 주변 병원 목록에서 고르기</button>`;
+    $("#nearBtn").onclick = () => openNear("hosp");
 
     const startBtn = btn("🧭 여기로 길 안내 시작", "btn-xl btn-primary", () => {
       if (!picked) return speak("먼저 갈 곳을 골라 주세요.");
@@ -1086,14 +1090,130 @@
   }
   $("#btn119").onclick = openSOS;
   $("#sosClose").onclick = () => { $("#sos").hidden = true; stopSpeaking(); };
+  $("#sosNear").onclick = () => openNear("er");
   $("#call119").onclick = () => { stopSpeaking(); };
+
+  // ───────────────────────── 가까운 병원 · 응급실 ─────────────────────────
+  // 1순위: 공공데이터(국립중앙의료원) — 키는 중계 서버(server.py 또는 worker.js)에만 있음
+  // 2순위: 키가 없으면 OpenStreetMap(Overpass) 무료 데이터
+  const near = { kind: "er", list: [], src: "", loading: false, back: "talk" };
+  const API_BASE = (window.HG_CONFIG && window.HG_CONFIG.apiBase || "").replace(/\/$/, "");
+  async function fetchPublic(kind, p) {
+    const base = API_BASE || (server.data ? "" : null);
+    if (base === null) return null;
+    try {
+      const r = await fetch(`${base ? base + "/" : ""}api/near?type=${kind}&lat=${p.lat}&lng=${p.lng}`);
+      if (!r.ok) return null;
+      const j = await r.json();
+      return Array.isArray(j.items) ? j.items : null;
+    } catch { return null; }
+  }
+  // 무료 대체: OpenStreetMap(Nominatim) 에서 주변 병원 찾기
+  async function fetchOSM(kind, p) {
+    const span = kind === "er" ? 0.08 : 0.02;           // 응급실 약 8km, 병원 약 2km
+    const vb = [p.lng - span, p.lat + span, p.lng + span, p.lat - span].join(",");
+    const queries = kind === "er" ? ["hospital"] : ["[amenity=hospital]", "[amenity=clinic]", "[amenity=doctors]"];
+    const seen = new Set(), out = [];
+    for (const q of queries) {
+      const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kr&accept-language=ko&limit=40&bounded=1&extratags=1&addressdetails=1&viewbox=${vb}&q=${encodeURIComponent(q)}`;
+      const r = await fetch(u); if (!r.ok) continue;
+      for (const x of await r.json()) {
+        const name = x.name; if (!name || seen.has(name)) continue;
+        // 응급실 찾기: 요양병원·한의원·치과·의원은 응급실이 없으니 뺌
+        if (kind === "er" && (!/병원|의료원|의료센터/.test(name) || /요양|한방|한의|치과|의원$|동물/.test(name))) continue;
+        if (/동물/.test(name)) continue;
+        seen.add(name);
+        const t = x.extratags || {}, a = x.address || {};
+        out.push({
+          name, lat: +x.lat, lng: +x.lon,
+          addr: [a.city || a.county, a.borough || a.city_district, a.road, a.house_number].filter(Boolean).join(" "),
+          tel: t.phone || t["contact:phone"] || "",
+          kind: kind === "er" ? (t.emergency === "yes" ? "응급실 있음" : "응급실 여부는 전화로 확인") : (t["healthcare:speciality"] || (x.type === "hospital" ? "병원" : "의원"))
+        });
+      }
+    }
+    return out;
+  }
+  async function loadNear() {
+    const box = $("#nearList"); if (!box) return;
+    near.loading = true; box.innerHTML = `<p class="muted">가까운 ${near.kind === "er" ? "응급실" : "병원"}을 찾는 중…</p>`;
+    let p = nav.pos;
+    if (!p) { const r = await requestLocation(); p = nav.pos; if (r !== "granted" || !p) { box.innerHTML = `<div class="sign">📍 위치를 알 수 없어요. <button class="btn btn-light" id="nearPerm">위치 켜는 방법 보기</button></div>`; $("#nearPerm").onclick = () => go("perm"); return speak("위치를 알 수 없어요. 위치를 켜 주세요."); } }
+    let list = await fetchPublic(near.kind, p), src = "공공데이터 (국립중앙의료원)";
+    if (!list) {
+      try { list = await fetchOSM(near.kind, p); src = "OpenStreetMap (무료 지도 데이터 · 공공데이터 키를 연결하면 더 정확해요)"; }
+      catch { box.innerHTML = `<p class="muted">인터넷 연결을 확인해 주세요.</p>`; return; }
+    }
+    list.forEach(x => { x.d = distanceM(p, x); });
+    list.sort((a, b) => a.d - b.d);
+    near.list = list.slice(0, 12); near.src = src; near.loading = false;
+    paintNear(p);
+  }
+  function paintNear(p) {
+    const box = $("#nearList"); if (!box) return;
+    const L0 = near.list;
+    $("#nearSrc").textContent = `자료: ${near.src}`;
+    if (!L0.length) { box.innerHTML = `<p class="muted">가까운 곳을 찾지 못했어요.</p>`; return speak("가까운 곳을 찾지 못했어요."); }
+    box.innerHTML = "";
+    L0.forEach((h, i) => {
+      const card = document.createElement("section");
+      card.className = "card near-card";
+      const tel = (h.erTel || h.tel || "").replace(/[^0-9]/g, "");
+      card.innerHTML = `
+        <div class="near-head"><span class="near-no">${i + 1}</span>
+          <div><p class="near-name">${esc(h.name)}</p>
+          <p class="muted">${distText(h.d)} · ${esc(h.kind || "")}${h.open ? ` · 오늘 ${esc(h.open)}~${esc(h.close || "")}` : ""}</p></div></div>
+        ${h.beds != null ? `<p class="near-beds ${h.beds > 0 ? "ok" : "no"}">🛏 응급실 빈 침대 ${h.beds > 0 ? h.beds + "개" : "없음"} <small>${esc(h.bedsAt || "")}</small></p>` : ""}
+        ${h.addr ? `<p class="muted" style="font-size:17px">${esc(h.addr)}</p>` : ""}
+        <div class="row2"></div>`;
+      const r2 = card.querySelector(".row2");
+      if (tel) { const a = document.createElement("a"); a.className = "btn btn-light"; a.href = "tel:" + tel; a.innerHTML = "📞 전화"; r2.append(a); }
+      else r2.append(btn("📞 번호 없음", "btn-light", () => speak("전화번호가 없어요.")));
+      r2.append(btn("🧭 길 안내", "btn-primary", () => { state.dest = { name: h.name, lat: h.lat, lng: h.lng }; state.outIdx = 0; save(); go("outdoor"); }));
+      box.append(card);
+    });
+    // 지도
+    if (hasLeaflet() && $("#nearMap")) {
+      if (maps.near) maps.near.remove();
+      const m = maps.near = L.map("nearMap", { attributionControl: true }); tiles(m);
+      const pts = [[p.lat, p.lng]];
+      L.marker([p.lat, p.lng], { icon: meIcon(), interactive: false }).addTo(m);
+      L0.forEach((h, i) => { pts.push([h.lat, h.lng]); L.marker([h.lat, h.lng], { icon: L.divIcon({ className: "num-pin", html: `<span>${i + 1}</span>`, iconSize: [34, 34], iconAnchor: [17, 17] }) }).addTo(m); });
+      m.fitBounds(L.latLngBounds(pts.slice(0, 6)).pad(0.15));
+    }
+    const f = L0[0];
+    speak(`가장 가까운 ${near.kind === "er" ? "응급실은" : "병원은"} ${f.name}이에요. 여기서 ${distText(f.d).replace("km", "킬로미터").replace("m", "미터")}예요.${f.beds === 0 ? " 지금 응급실 빈 침대가 없다고 나와요. 전화로 먼저 물어보세요." : ""} 전화 버튼이나 길 안내 버튼을 누르세요.`);
+  }
+  function renderNear() {
+    setStep(near.kind === "er" ? "🚑 가까운 응급실" : "🏥 가까운 병원", "");
+    main.innerHTML = `
+      <div class="tabs" role="tablist">
+        <button role="tab" class="tab ${near.kind === "er" ? "on" : ""}" data-k="er" aria-selected="${near.kind === "er"}">🚑 응급실</button>
+        <button role="tab" class="tab ${near.kind === "hosp" ? "on" : ""}" data-k="hosp" aria-selected="${near.kind === "hosp"}">🏥 병원·의원</button>
+      </div>
+      ${near.kind === "er" ? `<p class="sign" style="font-size:18px">많이 위급하면 기다리지 말고 <b>119</b>에 전화하세요. 119가 알맞은 응급실로 데려다줘요.</p>` : ""}
+      <div id="nearMap" class="map mini"></div>
+      <div id="nearList" class="near-list"></div>
+      <p class="muted" id="nearSrc" style="font-size:15px"></p>`;
+    main.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { near.kind = b.dataset.k; renderNear(); });
+    dock.replaceChildren(
+      ...(near.kind === "er" ? [btn("🚨 119 전화", "btn-xl btn-sos", openSOS)] : []),
+      row(btn("🔄 다시 찾기", "btn-light", loadNear), btn("⬅ 돌아가기", "btn-light", () => go(near.back || "talk")))
+    );
+    loadNear();
+  }
+  function openNear(kind) {
+    if (state.screen !== "near") near.back = state.screen === "doctor" ? "talk" : state.screen;
+    near.kind = kind || near.kind; $("#sos").hidden = true; go("near");
+  }
 
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
-    ({ doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    if (maps.near) { maps.near.remove(); maps.near = null; }
+    ({ near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
