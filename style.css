@@ -229,3 +229,14 @@ a.btn { text-decoration: none; color: inherit; }
 .ring .w { left: 6px; top: 50%; transform: translateY(-50%); }
 .compass-state { font-size: 16px; color: var(--warn); font-weight: 700; }
 .compass-state.on { color: var(--ok); }
+
+/* 보호자 */
+.g-form { display: flex; flex-direction: column; gap: 10px; }
+.g-form input { min-height: var(--tap); font-size: 22px; padding: 0 16px; border-radius: 16px; border: 2px solid var(--line); background: var(--bg); color: var(--ink); width: 100%; font-family: inherit; }
+.g-acts { display: flex; gap: 8px; }
+.g-acts .edit { min-width: 52px; min-height: 52px; display: inline-grid; place-items: center; text-decoration: none; font-size: 22px; }
+.g-events { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-left: 8px; }
+.g-events .field { font-size: 18px; }
+.g-preview { background: var(--bg); border-radius: 14px; padding: 12px 14px; font-size: 18px; margin: 0; word-break: break-all; }
+.g-btns { display: flex; flex-direction: column; gap: 10px; }
+.sos .btn-light[hidden], .help .btn[hidden] { display: none; }

@@ -14,7 +14,7 @@
   const store = {
     get(k, d) { try { const v = localStorage.getItem("hg:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem("hg:" + k, JSON.stringify(v)); } catch {} },
-    clear() { try { Object.keys(localStorage).filter(k => k.startsWith("hg:") && k !== "hg:permDone").forEach(k => localStorage.removeItem(k)); } catch {} }
+    clear() { try { Object.keys(localStorage).filter(k => k.startsWith("hg:") && !["hg:permDone", "hg:guardians", "hg:gopts"].includes(k)).forEach(k => localStorage.removeItem(k)); } catch {} }
   };
 
   const state = {
@@ -265,6 +265,7 @@
     ].filter(Boolean);
     $("#helpText").innerHTML = lines.join("<br>");
     $("#helpCard").hidden = false;
+    const hg = $("#helpGuardian"); if (hg) hg.hidden = !G.list().length;
     vibrate(80);
     speak("직원분께 이 화면을 보여 주세요.");
   }
@@ -288,6 +289,8 @@
       </section>
       <div class="row2"><button class="btn btn-light" id="goNearH">🏥 가까운 병원</button><button class="btn btn-light" id="goNearE">🚑 가까운 응급실</button></div>`;
     $("#goNearH").onclick = () => openNear("hosp"); $("#goNearE").onclick = () => openNear("er");
+    const gb = btn(G.list().length ? `👪 보호자 ${G.list().length}명 연결됨 · 바꾸기` : "👪 보호자(가족) 번호 등록하기", "btn-light", openGuardian);
+    main.append(gb);
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
     const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk));
     dock.replaceChildren(talk, row(btn("⌨️ 키보드로 말하기", "btn-light", () => typeFallback(handleUtterance)), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
@@ -525,6 +528,7 @@
     } else startCompass();
     startGPS();
     speak(step.voice);
+    if (i === 0) setTimeout(() => notifyGuardians("start", `병원 가는 길 안내를 시작했어요. 가는 곳: ${isPreset() ? "분당서울대병원 (미금역 → 7-1번 버스)" : state.dest.name}`), 4500);
     updateNavUI();
     // 3초 뒤에도 나침반 값이 없으면 지도 기준(북쪽=위) 화살표로 안내
     setTimeout(() => { if (state.screen === "outdoor") updateNavUI(); }, 3000);
@@ -612,6 +616,8 @@
     }
   }
   function nextOutdoor() {
+    const was = RT().outdoor[state.outIdx];
+    if (was && was.type === "bus") setTimeout(() => notifyGuardians("bus", "7-1번 버스에서 서울대병원 정류장에 잘 내렸어요."), 4000);
     state.outIdx++; save(); vibrate(60);
     if (state.outIdx >= RT().outdoor.length) { state.inIdx = 0; go(RT().indoor.length ? "indoor" : "done"); }
     else renderOutdoor();
@@ -636,6 +642,7 @@
       btn("🙋 직원에게 보여줄 도움 문장 크게 켜기", "btn-xl btn-help", openHelp)
     );
     speak(step.voice);
+    if (i === 0) setTimeout(() => notifyGuardians("arrive", "분당서울대병원 1동에 잘 도착했어요. 이제 처음오신 창구로 가요."), 4500);
   }
 
   function renderDone() {
@@ -643,12 +650,14 @@
     if (!isPreset()) {
       main.innerHTML = `<section class="card"><p class="big">${esc(state.dest.name)}에<br>잘 도착하셨어요. 👏</p><p style="margin-top:12px">건물 간판의 이름이 맞는지 한 번 더 확인하세요.</p></section>`;
       dock.replaceChildren(btn("🗺 다른 곳 고르기", "btn-xl btn-light", () => go("pick")), row(replayBtn(), helpBtn()));
+      setTimeout(() => notifyGuardians("arrive", `${state.dest.name}에 잘 도착했어요.`), 4000);
       return speak(`${state.dest.name}에 잘 도착하셨어요. 수고 많으셨어요.`);
     }
     main.innerHTML = `<section class="card"><p class="big">처음오신 창구에<br>잘 도착하셨어요. 👏</p>
       <p style="margin-top:12px">번호가 불리면 창구에서 <b>“오늘 예약하고 처음 왔어요”</b> 라고 말씀하세요.</p></section>`;
     dock.replaceChildren(btn("🩺 진료 받을 때 말씀 받아 적기", "btn-xl btn-talk", openDoctor), row(btn("🏠 처음 화면으로", "btn-light", () => resetAll()), helpBtn()));
     speak("처음오신 창구에 잘 도착하셨어요. 정말 수고 많으셨어요. 번호가 불리면 창구에서, 오늘 예약하고 처음 왔다고 말씀하세요.");
+    setTimeout(() => notifyGuardians("counter", "분당서울대병원 1동 1층 처음오신 창구에 잘 도착했어요. 이제 접수해요."), 7000);
   }
 
   // ───────────────────────── 권한 켜기 (위치 · 마이크 · 방향) ─────────────────────────
@@ -1083,6 +1092,10 @@
       <details class="card"><summary>받아 적은 말씀 전체 보기</summary><p style="margin:10px 0 0;font-size:19px">${esc(docText())}</p></details>`;
     const speakAll = () => speak(summarySpeech(s), { force: true });
     const shareBtn = btn("📤 가족에게 보내기", "btn-light", async () => {
+      if (G.list().length) {
+        const short = `[진료 메모] ${s.oneLine}` + ["caution", "medicine", "nextVisit"].filter(k => s[k] && s[k].length).map(k => `\n- ${s[k].slice(0, 2).join("\n- ")}`).join("");
+        return notifyGuardians("doctor", short, { force: true, urgent: true });
+      }
       const txt = `[병원한걸음 진료 메모]\n${s.oneLine}\n` + ["caution", "medicine", "nextVisit", "tests", "diagnosis", "other"]
         .filter(k => s[k] && s[k].length).map(k => { const c = DOC_CATS.find(d => d.key === k) || { icon: "📝", title: "그 밖의 말씀" }; return `\n${c.icon} ${c.title}\n- ${s[k].join("\n- ")}`; }).join("\n")
         + "\n\n※ 자동 정리라 틀릴 수 있어요. 약·날짜는 꼭 다시 확인하세요.";
@@ -1117,6 +1130,7 @@
       s.mobility && s.mobility !== "도움 필요 없음" ? `③ “${esc(s.mobility)}를 쓰고 있어요”` : ""
     ].filter(Boolean).join("<br>");
     $("#sos").hidden = false; vibrate([100, 60, 100]);
+    const sg = $("#sosGuardian"); if (sg) { sg.hidden = !G.list().length; }
     speak("119에 전화하려면 빨간 버튼을 누르세요. 전화가 연결되면, 어디인지와 무슨 일인지 말씀하세요.", { force: true });
     const locEl = $("#sosLoc");
     locEl.textContent = "📍 위치 찾는 중…";
@@ -1303,17 +1317,144 @@
     }
   }
 
+  // ───────────────────────── 보호자 연결 · 알림 ─────────────────────────
+  // 보호자 번호는 이 휴대폰에만 저장합니다. 알림은 어르신 휴대폰의 문자 앱으로 보내고,
+  // 보내기 버튼은 어르신이 직접 누릅니다(웹앱은 몰래 문자를 보낼 수 없고, 보내지도 않습니다).
+  const G = {
+    list() { return store.get("guardians", []); },
+    save(l) { store.set("guardians", l); },
+    opts() { return Object.assign({ ask: true, start: true, bus: true, arrive: true, counter: true, doctor: true, help: true }, store.get("gopts", {})); },
+    setOpt(k, v) { const o = G.opts(); o[k] = v; store.set("gopts", o); }
+  };
+  const G_EVENTS = [
+    ["start", "🚶 길 안내를 시작할 때"],
+    ["bus", "🚌 버스에서 내렸을 때"],
+    ["arrive", "🏥 병원(목적지)에 도착했을 때"],
+    ["counter", "✅ 창구에 도착했을 때"],
+    ["doctor", "🩺 진료 메모를 정리했을 때"],
+    ["help", "🙋 도움 요청 · 🚨 119를 눌렀을 때"]
+  ];
+  const fmtPhone = (n) => { const d = String(n).replace(/\D/g, ""); return d.length === 11 ? `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}` : d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : d; };
+  const validPhone = (n) => /^0\d{8,10}$/.test(String(n).replace(/\D/g, ""));
+  function smsHref(num, body) {
+    const n = String(num).replace(/\D/g, ""), b = encodeURIComponent(body);
+    return isIOS ? `sms:${n}&body=${b}` : `sms:${n}?body=${b}`;
+  }
+  const nowText = () => new Date().toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+  function mapLink(p) { return p ? `https://map.kakao.com/link/map/%ED%98%84%EC%9E%AC%EC%9C%84%EC%B9%98,${p.lat.toFixed(5)},${p.lng.toFixed(5)}` : ""; }
+  const notified = new Set(store.get("gsent", []));
+  function markSent(key) { notified.add(key); store.set("gsent", [...notified]); }
+
+  // 알림 판 띄우기: kind = 이벤트, text = 보낼 문장, force = 같은 여정에서 이미 보냈어도 다시 묻기
+  async function notifyGuardians(kind, text, { force = false, urgent = false } = {}) {
+    const list = G.list(), o = G.opts();
+    if (!list.length || (!urgent && (!o.ask || !o[kind]))) return;
+    const key = `${kind}:${state.outIdx}:${state.inIdx}:${state.dest ? state.dest.name : "preset"}`;
+    if (!force && notified.has(key)) return;
+    markSent(key);
+    let p = nav.pos;
+    if (!p && urgent) { await Promise.race([requestLocation(), new Promise(r => setTimeout(r, 4000))]); p = nav.pos; }
+    const body = `[병원한걸음] ${text} (${nowText()})${p ? `\n지금 위치: ${mapLink(p)}` : ""}`;
+    showGuardianSheet(body, urgent);
+  }
+  function showGuardianSheet(body, urgent) {
+    const old = $("#gSheet"); if (old) old.remove();
+    const list = G.list();
+    const wrap = document.createElement("div");
+    wrap.id = "gSheet"; wrap.className = "overlay sheet"; wrap.setAttribute("role", "dialog"); wrap.setAttribute("aria-modal", "true");
+    wrap.innerHTML = `<div class="sheet-inner">
+      <p class="big" style="font-size:26px">👪 ${urgent ? "보호자에게 바로 알리세요" : "보호자에게 알릴까요?"}</p>
+      <p class="g-preview">${esc(body).replace(/\n/g, "<br>")}</p>
+      <div class="g-btns"></div>
+      <button class="btn btn-light" id="gLater">${urgent ? "닫기" : "괜찮아요 (안 보내기)"}</button>
+    </div>`;
+    const box = wrap.querySelector(".g-btns");
+    list.forEach(g => {
+      const r = document.createElement("div"); r.className = "row2";
+      const a = document.createElement("a"); a.className = "btn btn-primary"; a.href = smsHref(g.phone, body); a.innerHTML = `📩 ${esc(g.name)}에게 문자`;
+      a.onclick = () => setTimeout(() => wrap.remove(), 500);
+      const c = document.createElement("a"); c.className = "btn btn-light"; c.href = "tel:" + String(g.phone).replace(/\D/g, ""); c.innerHTML = `📞 전화`;
+      r.append(a, c); box.append(r);
+    });
+    if (navigator.share) box.append(btn("💬 카카오톡 등으로 보내기", "btn-light", async () => { try { await navigator.share({ text: body }); wrap.remove(); } catch {} }));
+    wrap.querySelector("#gLater").onclick = () => wrap.remove();
+    document.body.append(wrap);
+    vibrate(urgent ? [200, 100, 200] : 60);
+    const who = list.length === 1 ? list[0].name : "보호자";
+    speak(urgent ? `${who}에게 문자를 보내거나 전화하세요.` : `${who}에게 문자로 알릴까요? 보내려면 초록 버튼을 누르세요.`);
+  }
+
+  // 보호자 등록 화면
+  function renderGuardian() {
+    setStep("👪 보호자 연결", "번호는 이 휴대폰에만 저장");
+    const list = G.list(), o = G.opts();
+    main.innerHTML = `
+      <section class="card">
+        <p class="big" style="font-size:26px">병원 가는 동안<br>가족에게 알려 드려요.</p>
+        <p class="muted" style="margin-top:8px">출발·도착할 때 문자 보낼 준비를 해 드려요. <b>보내기 버튼은 직접 누르시면</b> 돼요.</p>
+      </section>
+      <section class="slots" id="gList">${list.length ? "" : '<p class="muted">아직 등록한 보호자가 없어요.</p>'}</section>
+      ${list.length < 3 ? `
+      <form class="card g-form" id="gForm">
+        <p class="muted" style="margin:0">보호자 추가 (최대 3명)</p>
+        <input id="gName" placeholder="부르는 이름 (예: 큰딸, 아들)" maxlength="12" autocomplete="off">
+        <input id="gPhone" type="tel" inputmode="tel" placeholder="휴대폰 번호 (예: 010-1234-5678)" maxlength="13" autocomplete="off">
+        ${"contacts" in navigator && "ContactsManager" in window ? '<button type="button" class="btn btn-light" id="gPick">📒 연락처에서 고르기</button>' : ""}
+        <button class="btn btn-primary" type="submit">➕ 보호자 추가</button>
+        <p class="muted" id="gErr" style="margin:0;color:var(--danger)"></p>
+      </form>` : ""}
+      <section class="card">
+        <label class="field row"><input type="checkbox" id="gAsk" ${o.ask ? "checked" : ""}> 아래 순간마다 보호자에게 알릴지 물어보기</label>
+        <div class="g-events">${G_EVENTS.map(([k, label]) => `<label class="field row"><input type="checkbox" data-ev="${k}" ${o[k] ? "checked" : ""}> ${label}</label>`).join("")}</div>
+      </section>
+      <p class="muted" style="font-size:16px">🔒 번호는 이 휴대폰 안에만 저장되고 어디에도 보내지 않아요. ‘처음부터 다시’를 눌러도 지워지지 않아요.</p>`;
+    const gl = $("#gList");
+    list.forEach((g, i) => {
+      const el = document.createElement("div"); el.className = "slot";
+      el.innerHTML = `<div><div class="v">👤 ${esc(g.name)}</div><div class="k">${esc(fmtPhone(g.phone))}</div></div>`;
+      const acts = document.createElement("div"); acts.className = "g-acts";
+      const t = document.createElement("a"); t.className = "edit"; t.href = "tel:" + g.phone.replace(/\D/g, ""); t.textContent = "📞"; t.setAttribute("aria-label", g.name + "에게 전화");
+      acts.append(t, btn("🗑", "edit", () => { if (confirm(`${g.name} 번호를 지울까요?`)) { const l = G.list(); l.splice(i, 1); G.save(l); renderGuardian(); } }, { ariaLabel: g.name + " 지우기" }));
+      el.append(acts); gl.append(el);
+    });
+    const form = $("#gForm");
+    if (form) {
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        const name = $("#gName").value.trim() || "보호자", phone = $("#gPhone").value.trim();
+        if (!validPhone(phone)) { $("#gErr").textContent = "휴대폰 번호를 다시 확인해 주세요. (예: 010-1234-5678)"; return speak("휴대폰 번호를 다시 확인해 주세요."); }
+        const l = G.list(); l.push({ name, phone: phone.replace(/\D/g, "") }); G.save(l);
+        speak(`${name} 번호를 저장했어요.`); renderGuardian();
+      };
+      const pick = $("#gPick");
+      if (pick) pick.onclick = async () => {
+        try {
+          const [c] = await navigator.contacts.select(["name", "tel"], { multiple: false });
+          if (c) { $("#gName").value = (c.name && c.name[0]) || ""; $("#gPhone").value = (c.tel && c.tel[0]) || ""; }
+        } catch {}
+      };
+    }
+    $("#gAsk").onchange = (e) => G.setOpt("ask", e.target.checked);
+    main.querySelectorAll("[data-ev]").forEach(c => c.onchange = () => G.setOpt(c.dataset.ev, c.checked));
+    dock.replaceChildren(
+      ...(list.length ? [btn("📩 시험 문자 보내 보기", "btn-xl btn-primary", () => notifyGuardians("test", "병원한걸음 보호자 알림 시험이에요. 병원 갈 때 이렇게 알려 드려요.", { force: true, urgent: true }))] : []),
+      btn("⬅ 돌아가기", "btn-light", () => go(G.back || "talk"))
+    );
+    if (!list.length) speak("가족 번호를 등록하면, 병원 가는 동안 출발하고 도착할 때마다 문자로 알릴 수 있어요.");
+  }
+  function openGuardian() { if (state.screen !== "guardian") G.back = state.screen; $("#settings").hidden = true; $("#sos").hidden = true; go("guardian"); }
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
-    ({ near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    ({ guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
-    stopSpeaking(); stopNav(); store.clear();
+    stopSpeaking(); stopNav(); store.clear(); notified.clear();
     Object.assign(state, { screen: "talk", slots: { hospital: null, firstVisit: null, mobility: null, reception: null }, heard: "", outIdx: 0, inIdx: 0, dest: null });
     nav.pos = null; nav.heading = null; save(); render();
   }
@@ -1341,6 +1482,9 @@
   $("#demoToggle").onchange = (e) => { state.demo = e.target.checked; nav.pos = null; nav.heading = null; save(); };
   $("#reduceMotion").onchange = (e) => { state.reduce = e.target.checked; save(); document.body.classList.toggle("reduce", state.reduce); };
   $("#testVoice").onclick = () => speak("안녕하세요. 병원 한걸음이에요. 천천히, 한 걸음씩 같이 가요.", { force: true });
+  $("#guardianBtn").onclick = openGuardian;
+  $("#sosGuardian").onclick = () => { $("#sos").hidden = true; notifyGuardians("help", "도움이 필요해요! 119에 전화하려고 해요. 연락 주세요.", { force: true, urgent: true }); };
+  $("#helpGuardian").onclick = () => { $("#helpCard").hidden = true; notifyGuardians("help", `길을 잃었어요. ${state.screen === "indoor" ? "분당서울대병원 1동 안이에요." : ""} 연락 주세요.`, { force: true, urgent: true }); };
   $("#permAgain").onclick = () => { $("#settings").hidden = true; perm.loc = perm.mic = perm.compass = "unknown"; go("perm"); };
   $("#resetAll").onclick = () => { $("#settings").hidden = true; resetAll(); };
 
