@@ -95,12 +95,14 @@
     if (synth) synth.cancel();
     if (audioEl) { audioEl.pause(); audioEl = null; }
   }
-  async function speak(text, { force = false } = {}) {
-    state.lastSaid = text;
-    if (!state.sound && !force) return;
+  const spokeDone = () => window.dispatchEvent(new Event("hg:spoken"));
+  async function speak(text, { force = false, lang = "ko-KR" } = {}) {
+    if (lang === "ko-KR") state.lastSaid = text;
+    if (!state.sound && !force) { spokeDone(); return; }
     stopSpeaking();
+    window.dispatchEvent(new Event("hg:speaking"));
     const token = speakToken;
-    const useServer = server.tts && ($("#voiceSelect").value === "server");
+    const useServer = lang === "ko-KR" && server.tts && ($("#voiceSelect").value === "server");
     if (useServer) {
       try {
         const r = await fetch("api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, speed: state.rate }) });
@@ -108,26 +110,32 @@
         const blob = await r.blob();
         if (token !== speakToken) return;
         audioEl = new Audio(URL.createObjectURL(blob));
+        audioEl.onended = () => { if (token === speakToken) spokeDone(); };
         await audioEl.play();
         return;
       } catch { /* 기기 목소리로 넘어감 */ }
     }
-    if (!synth) return;
-    const v = voices.find(x => x.voiceURI === $("#voiceSelect").value) || voices[0];
-    splitSentences(text).forEach((s, i) => {
+    if (!synth) return spokeDone();
+    const v = lang === "ko-KR"
+      ? (voices.find(x => x.voiceURI === $("#voiceSelect").value) || voices[0])
+      : synth.getVoices().filter(x => x.lang.replace("_", "-").toLowerCase().startsWith(lang.slice(0, 2).toLowerCase())).sort((x, y) => scoreAny(y) - scoreAny(x))[0];
+    const parts = splitSentences(text);
+    parts.forEach((s, i) => {
       const u = new SpeechSynthesisUtterance(s);
-      u.lang = "ko-KR"; if (v) u.voice = v;
+      u.lang = lang; if (v) u.voice = v;
       u.rate = state.rate; u.pitch = 1.0; u.volume = 1;
+      if (i === parts.length - 1) u.onend = () => { if (token === speakToken) spokeDone(); };
       synth.speak(u);
     });
   }
+  function scoreAny(v) { let s = 0; NATURAL_HINTS.forEach((re, i) => { if (re.test(v.name)) s += 20 - i; }); return s; }
   function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch {} }
 
   // ───────────────────────── 음성 인식 ─────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   // 말하기: 브라우저 음성 인식 → 안 되면 휴대폰 키보드의 🎤(받아쓰기)로 대신 입력
   let activeRec = null;
-  function listen(onText, btn) {
+  function listen(onText, btn, opts = {}) {
     if (activeRec) { activeRec.stop(); return; }           // 한 번 더 누르면 멈춤
     if (!SR || !isSecureContext) return typeFallback(onText, "이 브라우저는 바로 듣기를 지원하지 않아요.");
     stopSpeaking();
@@ -150,6 +158,7 @@
       activeRec = null; clearTimeout(maxT); clearTimeout(silenceT);
       btn.classList.remove("listening"); btn.innerHTML = label;
       if (text.trim()) return onText(text.trim());
+      if ((errored === "not-allowed" || errored === "service-not-allowed") && opts.quiet && typeof setHandsfree === "function") setHandsfree(false);
       if (errored === "not-allowed" || errored === "service-not-allowed") {
         const why = isIOS
           ? "마이크나 받아쓰기가 꺼져 있어요. 설정 → Safari → 마이크 ‘허용’, 그리고 설정 → 일반 → 키보드 → ‘받아쓰기 활성화’를 켜 주세요."
@@ -160,6 +169,7 @@
       if (errored === "audio-capture") { speak("다른 앱이 마이크를 쓰고 있어요."); return typeFallback(onText, "다른 앱이 마이크를 쓰고 있어요. 통화나 녹음을 끄고 다시 해 보세요."); }
       if (errored === "network" || errored === "language-not-supported") return typeFallback(onText, "인터넷이 약해서 바로 듣기가 안 돼요.");
       if (errored === "aborted") return;
+      if (opts.quiet && (errored === "no-speech" || !errored)) { if (opts.onIdle) opts.onIdle(); return; }
       // no-speech 또는 아무 말도 못 들음
       speak("잘 안 들렸어요. 노란 버튼을 누르고, 휴대폰에 입을 가까이 대고 말씀해 주세요.");
       if (!gotAny) listen.miss = (listen.miss || 0) + 1;
@@ -287,8 +297,19 @@
           <button class="btn btn-light" data-q="분당서울대병원 처음 가요. 휠체어 타고 접수도 도와주세요">휠체어 · 첫 방문</button>
         </div>
       </section>
-      <div class="row2"><button class="btn btn-light" id="goNearH">🏥 가까운 병원</button><button class="btn btn-light" id="goNearE">🚑 가까운 응급실</button></div>`;
+      ${planBanner()}
+      <div class="tiles">
+        <button class="tile" id="goNearH">🏥<span>가까운 병원</span></button>
+        <button class="tile" id="goNearE">🚑<span>가까운 응급실</span></button>
+        <button class="tile" id="goPlan">⏰<span>몇 시에 나갈까</span></button>
+        <button class="tile" id="goTaxi">🚕<span>택시 타기</span></button>
+        <button class="tile" id="goWhere">📷<span>여기가 어디?</span></button>
+        <button class="tile" id="goLang">🌐<span>외국어·필담</span></button>
+      </div>`;
     $("#goNearH").onclick = () => openNear("hosp"); $("#goNearE").onclick = () => openNear("er");
+    $("#goPlan").onclick = () => openScreen("plan"); $("#goTaxi").onclick = () => openScreen("taxi");
+    $("#goWhere").onclick = () => openScreen("where"); $("#goLang").onclick = () => openScreen("lang");
+    const pb = $("#planBanner"); if (pb) pb.onclick = () => openScreen("plan");
     const gb = btn(G.list().length ? `👪 보호자 ${G.list().length}명 연결됨 · 바꾸기` : "👪 보호자(가족) 번호 등록하기", "btn-light", openGuardian);
     main.append(gb);
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
@@ -518,7 +539,7 @@
       btn("⬅ 이전 지점", "btn-light", () => { if (state.outIdx > 0) { state.outIdx--; save(); renderOutdoor(); } else go("pick"); }),
       isPreset() ? btn("🏥 1동에 들어왔어요", "btn-light", () => { state.inIdx = 0; go("indoor"); })
                  : btn("🗺 목적지 바꾸기", "btn-light", () => go("pick"))
-    ));
+    ), row(btn("📷 여기가 어디?", "btn-light", () => openScreen("where")), btn("🚕 택시 타기", "btn-light", () => openScreen("taxi"))));
 
     // 센서 권한: iOS 는 버튼 눌러야 함
     const needsTap = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
@@ -636,6 +657,7 @@
       </section>
       <section class="sign">🪧 ${step.sign}</section>
       <section class="card"><p class="muted">소리를 꺼도 화면 글씨와 버튼만으로 끝까지 갈 수 있어요. 마지막으로 확인한 곳을 기억해 둡니다.</p></section>`;
+    main.append(row(btn("📷 표지판 찍어 묻기", "btn-light", () => openScreen("where")), btn("🌐 외국어·필담", "btn-light", () => openScreen("lang"))));
     dock.replaceChildren(
       btn(i === RT().indoor.length - 1 ? "✅ 창구에 도착했어요" : "👍 했어요 · 다음", "btn-xl btn-primary", () => { state.inIdx++; save(); vibrate(60); renderIndoor(); }),
       row(replayBtn(), btn("⬅ 이전 단계", "btn-light", () => { if (state.inIdx > 0) { state.inIdx--; save(); renderIndoor(); } else { state.outIdx = RT().outdoor.length - 1; go("outdoor"); } })),
@@ -1434,6 +1456,7 @@
         } catch {}
       };
     }
+    liveSection(main);
     $("#gAsk").onchange = (e) => G.setOpt("ask", e.target.checked);
     main.querySelectorAll("[data-ev]").forEach(c => c.onchange = () => G.setOpt(c.dataset.ev, c.checked));
     dock.replaceChildren(
@@ -1444,13 +1467,436 @@
   }
   function openGuardian() { if (state.screen !== "guardian") G.back = state.screen; $("#settings").hidden = true; $("#sos").hidden = true; go("guardian"); }
 
+  // ───────────────────────── 화면 이동 공통 (돌아갈 곳 기억) ─────────────────────────
+  const backOf = {};
+  function openScreen(name) {
+    if (state.screen !== name) backOf[name] = ["lang", "taxi", "plan", "where"].includes(state.screen) ? (backOf[state.screen] || "talk") : state.screen;
+    ["#settings", "#sos", "#helpCard"].forEach(id => { const el = $(id); if (el) el.hidden = true; });
+    const gs = $("#gSheet"); if (gs) gs.remove();
+    go(name);
+  }
+  const backBtnTo = (name) => btn("⬅ 돌아가기", "btn-light", () => go(backOf[name] || "talk"));
+
+  // ───────────────────────── 11. 외국어 카드 · 필담 ─────────────────────────
+  const LANGS = {
+    en: { label: "English", tts: "en-US" },
+    zh: { label: "中文", tts: "zh-CN" },
+    vi: { label: "Tiếng Việt", tts: "vi-VN" },
+    ja: { label: "日本語", tts: "ja-JP" },
+    ru: { label: "Русский", tts: "ru-RU" }
+  };
+  const PHRASES = [
+    { ko: "처음 왔어요. 접수를 도와주세요.", en: "This is my first visit. Please help me register.", zh: "我是第一次来。请帮我挂号。", vi: "Tôi đến lần đầu. Xin giúp tôi đăng ký khám.", ja: "初めて来ました。受付を手伝ってください。", ru: "Я здесь впервые. Помогите мне, пожалуйста, зарегистрироваться." },
+    { ko: "길을 잃었어요. 처음오신 창구가 어디예요?", en: "I am lost. Where is the first-visit desk?", zh: "我迷路了。初诊窗口在哪里？", vi: "Tôi bị lạc. Quầy dành cho người khám lần đầu ở đâu?", ja: "道に迷いました。初診の窓口はどこですか？", ru: "Я заблудился. Где регистратура для первичных пациентов?" },
+    { ko: "한국어를 잘 못해요. 통역이 필요해요.", en: "I don't speak Korean well. I need an interpreter.", zh: "我韩语不好。我需要翻译。", vi: "Tôi không giỏi tiếng Hàn. Tôi cần phiên dịch.", ja: "韓国語がうまく話せません。通訳が必要です。", ru: "Я плохо говорю по-корейски. Мне нужен переводчик." },
+    { ko: "예약했어요. 진료실이 어디예요?", en: "I have an appointment. Where is the doctor's office?", zh: "我有预约。诊室在哪里？", vi: "Tôi đã đặt lịch hẹn. Phòng khám ở đâu?", ja: "予約しています。診察室はどこですか？", ru: "У меня запись к врачу. Где кабинет?" },
+    { ko: "수납은 어디에서 해요?", en: "Where do I pay?", zh: "在哪里缴费？", vi: "Tôi thanh toán ở đâu?", ja: "会計はどこですか？", ru: "Где можно оплатить?" },
+    { ko: "화장실이 어디예요?", en: "Where is the restroom?", zh: "洗手间在哪里？", vi: "Nhà vệ sinh ở đâu?", ja: "トイレはどこですか？", ru: "Где туалет?" },
+    { ko: "몸이 많이 아파요. 도와주세요.", en: "I feel very sick. Please help me.", zh: "我很不舒服。请帮帮我。", vi: "Tôi rất đau. Xin hãy giúp tôi.", ja: "とても具合が悪いです。助けてください。", ru: "Мне очень плохо. Помогите, пожалуйста." },
+    { ko: "보행기를 써요. 엘리베이터가 어디예요?", en: "I use a walker. Where is the elevator?", zh: "我用助行器。电梯在哪里？", vi: "Tôi dùng khung tập đi. Thang máy ở đâu?", ja: "歩行器を使っています。エレベーターはどこですか？", ru: "Я хожу с ходунками. Где лифт?" }
+  ];
+  const DEAF = [
+    "귀가 잘 안 들려요. 글로 써 주세요.",
+    "천천히, 입 모양이 보이게 말씀해 주세요.",
+    "수어 통역이 필요해요.",
+    "제 이름이 불리면 어깨를 살짝 두드려 주세요."
+  ];
+  function showBigCard(ko, sub, readLang) {
+    const card = $("#helpCard");
+    $("#helpText").innerHTML = esc(ko) + (sub ? `<span class="help-sub">${esc(sub)}</span>` : "");
+    card.hidden = false;
+    const hg = $("#helpGuardian"); if (hg) hg.hidden = true;
+    speak(ko, { force: true });
+    if (readLang && sub) window.addEventListener("hg:spoken", () => speak(sub, { force: true, lang: readLang }), { once: true });
+  }
+  function renderLang() {
+    const cur = store.get("lang2", "en");
+    setStep("🌐 외국어 · 필담", "직원에게 보여 주는 카드");
+    main.innerHTML = `
+      <section class="card"><p class="muted" style="margin:0">내 말을 고르세요 · Choose your language</p>
+        <div class="lang-tabs">${Object.entries(LANGS).map(([k, v]) => `<button class="tab ${k === cur ? "on" : ""}" data-lang="${k}">${v.label}</button>`).join("")}
+        <button class="tab ${cur === "deaf" ? "on" : ""}" data-lang="deaf">🧏 필담</button></div></section>
+      <section class="phrases" id="phrases"></section>`;
+    main.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => { store.set("lang2", b.dataset.lang); renderLang(); });
+    const box = $("#phrases");
+    if (cur === "deaf") {
+      box.innerHTML = `
+        <section class="card">
+          <p class="muted" style="margin:0 0 8px">직원분이 쓰거나, 제가 써서 보여 드려요</p>
+          <textarea id="penBox" rows="4" placeholder="여기에 써 주세요"></textarea>
+          <div class="row2" style="margin-top:10px"></div>
+        </section>`;
+      const r2 = box.querySelector(".row2"), pen = $("#penBox");
+      r2.append(
+        btn("🔍 크게 보기", "btn-primary", () => pen.value.trim() && showBigCard(pen.value.trim())),
+        btn("🎙 직원 말 → 글자", "btn-talk", function () { listen(t => { pen.value = (pen.value ? pen.value + "\n" : "") + t; }, this); })
+      );
+      box.append(btn("🗑 지우기", "btn-light", () => { pen.value = ""; pen.focus(); }));
+      DEAF.forEach(t => box.append(btn(t, "btn-light phrase", () => showBigCard(t))));
+    } else {
+      PHRASES.forEach(p => box.append(btn(`<span class="ph-main">${esc(p[cur])}</span><span class="ph-ko">${esc(p.ko)}</span>`, "btn-light phrase", () => showBigCard(p.ko, p[cur], LANGS[cur].tts))));
+    }
+    dock.replaceChildren(backBtnTo("lang"));
+  }
+
+  // ───────────────────────── 7. 택시 · 교통약자 콜택시 ─────────────────────────
+  function taxiDest() {
+    if (!isPreset() && state.dest) return { name: state.dest.name, lat: state.dest.lat, lng: state.dest.lng, door: `${state.dest.name} 정문` };
+    const h = RT().outdoor[RT().outdoor.length - 1];
+    return { name: "분당서울대학교병원", lat: h.lat, lng: h.lng, door: "분당서울대학교병원 1동 정문", addr: "성남시 분당구 구미로173번길 82" };
+  }
+  function renderTaxi() {
+    const d = taxiDest(), m = state.slots.mobility, T = R.taxi || {};
+    setStep("🚕 택시 타기", "기사님께 화면을 보여 주세요");
+    main.innerHTML = `
+      <section class="help-mini taxi-card">
+        <p class="help-small">기사님께 보여 드리세요</p>
+        <p class="help-q">“${esc(d.door)}으로 가 주세요.”</p>
+        ${d.addr ? `<p class="muted" style="color:#5b4a00">주소: ${esc(d.addr)}</p>` : ""}
+        ${m === "보행기" ? '<p class="help-q" style="font-size:22px">보행기를 트렁크에 실어 주세요.</p>' : m === "휠체어" ? '<p class="help-q" style="font-size:22px">휠체어를 써요. 타고 내릴 때 도와주세요.</p>' : ""}
+        <p class="help-q" style="font-size:22px">천천히 가 주세요. 감사합니다.</p>
+      </section>
+      <section class="card">
+        <p class="muted" style="margin:0 0 6px">휠체어·보행기라 일반 택시가 어려우면</p>
+        <p style="margin:0;font-size:20px"><b>${esc(T.name || "교통약자 콜택시")}</b>${T.note ? `<br><small class="muted">${esc(T.note)}</small>` : ""}</p>
+      </section>`;
+    const r = document.createElement("div"); r.className = "row2";
+    const kakao = document.createElement("a"); kakao.className = "btn btn-talk"; kakao.href = "kakaot://taxi"; kakao.innerHTML = "🚕 카카오 T 열기";
+    kakao.onclick = () => setTimeout(() => { if (!document.hidden) speak("카카오 T 앱이 없으면, 앱 스토어에서 카카오 티를 설치해 주세요. 아래 콜택시 전화도 있어요.", { force: true }); }, 1800);
+    r.append(kakao);
+    if (T.phone) { const c = document.createElement("a"); c.className = "btn btn-light"; c.href = "tel:" + T.phone.replace(/\D/g, ""); c.innerHTML = `♿ ${esc(T.phone)}`; r.append(c); }
+    main.append(r);
+    if (G.list().length) main.append(btn("👪 택시 탄다고 보호자에게 알리기", "btn-light", () => notifyGuardians("start", `택시를 타고 ${d.name}에 가요.`, { force: true, urgent: true })));
+    dock.replaceChildren(btn("🔊 기사님께 읽어 드리기", "btn-xl btn-primary", () => speak(`${d.door}으로 가 주세요.${m === "보행기" ? " 보행기를 트렁크에 실어 주세요." : m === "휠체어" ? " 휠체어를 써요. 타고 내릴 때 도와주세요." : ""} 천천히 가 주세요. 감사합니다.`, { force: true })), backBtnTo("taxi"));
+    speak("택시를 타시면 이 화면을 기사님께 보여 드리세요. 카카오 티로 부르거나, 휠체어와 보행기용 콜택시에 전화할 수 있어요.");
+  }
+
+  // ───────────────────────── 8. 출발 시간 계산 ─────────────────────────
+  const WALK = 0.6; // 어르신 걷는 속도 (m/초) ≈ 시속 2.2km
+  function parseKoTime(t) {
+    const n = { 한: 1, 두: 2, 세: 3, 네: 4, 다섯: 5, 여섯: 6, 일곱: 7, 여덟: 8, 아홉: 9, 열: 10, 열한: 11, 열두: 12 };
+    const m = t.replace(/\s/g, "").match(/(오전|오후|아침|낮|저녁)?(\d{1,2}|열한|열두|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)시(반|(\d{1,2})분)?/);
+    if (!m) return null;
+    let h = /\d/.test(m[2]) ? +m[2] : n[m[2]];
+    const min = m[3] === "반" ? 30 : m[4] ? +m[4] : 0;
+    if ((m[1] === "오후" || m[1] === "저녁" || m[1] === "낮") && h < 12) h += 12;
+    if (!m[1] && h >= 1 && h <= 6) h += 12;            // "3시" 진료는 보통 오후
+    const day = /모레/.test(t) ? 2 : /내일/.test(t) ? 1 : 0;
+    return { h, min, day };
+  }
+  function planSteps(first) {
+    const O = RT().outdoor, out = [];
+    if (isPreset()) {
+      out.push(["🏠 집 → 미금역", +store.get("homeMin", 15)]);
+      out.push(["🚶 역 엘리베이터 → 정류장", Math.ceil(distanceM(O[0], O[1]) / WALK / 60) + 3]);
+      out.push(["⏳ 7-1번 기다리기", 15]);
+      out.push(["🚌 7-1번 타고 가기 (3정거장)", 10]);
+      out.push(["🚶 정류장 → 1동 입구", Math.ceil(distanceM(O[2], O[3]) / WALK / 60) + 3]);
+      out.push(["🏥 1동 → 창구 · 접수", 15]);
+    } else {
+      const from = nav.pos || O[0];
+      const d = distanceM(from, O[0]);
+      out.push([d > 1500 ? `🚕 지금 위치 → ${state.dest.name} (택시·버스 권장)` : `🚶 지금 위치 → ${state.dest.name}`, Math.ceil((d > 1500 ? d / 5 : d / WALK) / 60) + 10]);
+      out.push(["🏥 접수", 15]);
+    }
+    if (first) out.push(["🕐 처음 방문이라 일찍 도착", 20]);
+    return out;
+  }
+  const hm = (d) => d.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+  const md = (d) => d.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+  function makeIcs(appt, leave, place) {
+    const f = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const uid = "hg-" + appt.getTime() + "@hangeoreum";
+    return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//hangeoreum//KO", "BEGIN:VEVENT", `UID:${uid}`, `DTSTAMP:${f(new Date())}`,
+      `DTSTART:${f(leave)}`, `DTEND:${f(appt)}`, `SUMMARY:병원 가는 날 - ${hm(leave)} 출발`, `LOCATION:${place}`,
+      `DESCRIPTION:${hm(appt)} 진료. 병원한걸음 앱을 열고 길 안내를 시작하세요.`,
+      "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY", "DESCRIPTION:30분 뒤 병원 갈 준비", "END:VALARM",
+      "BEGIN:VALARM", "TRIGGER:PT0M", "ACTION:DISPLAY", "DESCRIPTION:지금 출발하세요", "END:VALARM",
+      "BEGIN:VALARM", "TRIGGER:-P1D", "ACTION:DISPLAY", "DESCRIPTION:내일 병원 가는 날", "END:VALARM",
+      "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+  }
+  function renderPlan() {
+    setStep("⏰ 언제 나갈까요?", "진료 시간으로 계산");
+    const saved = store.get("plan", null);
+    const now = new Date(), def = saved ? new Date(saved.appt) : new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 10, 0);
+    const pad = (n) => String(n).padStart(2, "0");
+    main.innerHTML = `
+      <section class="card">
+        <p class="big" style="font-size:26px">진료가 몇 시예요?</p>
+        <div class="plan-inputs">
+          <label class="field">날짜<input type="date" id="pDate" value="${def.getFullYear()}-${pad(def.getMonth() + 1)}-${pad(def.getDate())}"></label>
+          <label class="field">시간<input type="time" id="pTime" value="${pad(def.getHours())}:${pad(def.getMinutes())}"></label>
+        </div>
+        ${isPreset() ? `<label class="field" style="margin-top:8px">집에서 미금역까지 (분)<input type="number" id="pHome" min="0" max="120" value="${store.get("homeMin", 15)}" inputmode="numeric"></label>` : ""}
+        <label class="field row" style="margin-top:8px"><input type="checkbox" id="pFirst" ${state.slots.firstVisit !== false ? "checked" : ""}> 처음 가는 병원이에요</label>
+      </section>
+      <section class="card" id="planOut"></section>`;
+    const calc = () => {
+      const [y, mo, da] = $("#pDate").value.split("-").map(Number), [hh, mm] = $("#pTime").value.split(":").map(Number);
+      if (!y || hh == null) return;
+      if ($("#pHome")) store.set("homeMin", Math.max(0, +$("#pHome").value || 0));
+      const appt = new Date(y, mo - 1, da, hh, mm), steps = planSteps($("#pFirst").checked);
+      const total = steps.reduce((a, [, m]) => a + m, 0), leave = new Date(appt - total * 60000);
+      store.set("plan", { appt: appt.getTime(), leave: leave.getTime(), place: taxiDest().name });
+      let t = new Date(leave);
+      $("#planOut").innerHTML = `
+        <p class="muted" style="margin:0">${md(appt)} ${hm(appt)} 진료라면</p>
+        <p class="plan-leave">${hm(leave)}에<br>집에서 나가세요</p>
+        <ol class="plan-list">${steps.map(([label, m]) => { const s0 = hm(t); t = new Date(t.getTime() + m * 60000); return `<li><b>${s0}</b> ${esc(label)} <small>${m}분</small></li>`; }).join("")}
+        <li><b>${hm(appt)}</b> 🩺 진료</li></ol>
+        <p class="muted" style="font-size:15px;margin:6px 0 0">어르신 걸음(시속 약 2km)과 버스 기다리는 시간 15분을 넣어 넉넉히 계산했어요.</p>`;
+      return { appt, leave };
+    };
+    ["#pDate", "#pTime", "#pHome", "#pFirst"].forEach(id => { const el = $(id); if (el) el.onchange = el.oninput = calc; });
+    let r = calc();
+    const talkB = btn("🎙 말로 하기 (예: 내일 10시 반)", "btn-talk", function () {
+      listen(t => {
+        const p = parseKoTime(t); if (!p) return speak("시간을 못 알아들었어요. 예를 들어, 내일 열 시 반, 처럼 말씀해 주세요.");
+        const d = new Date(); d.setDate(d.getDate() + p.day);
+        $("#pDate").value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; $("#pTime").value = `${pad(p.h)}:${pad(p.min)}`;
+        r = calc(); sayPlan();
+      }, this);
+    });
+    const sayPlan = () => { r = calc(); if (r) speak(`${md(r.appt)} ${hm(r.appt)} 진료라면, ${hm(r.leave)}에 집에서 나가세요.`, { force: true }); };
+    const ics = btn("📅 달력에 알림 넣기", "btn-light", () => {
+      r = calc(); if (!r) return;
+      const blob = new Blob([makeIcs(r.appt, r.leave, taxiDest().door || taxiDest().name)], { type: "text/calendar" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "병원가는날.ics"; document.body.append(a); a.click(); a.remove();
+      speak("달력에 넣는 파일을 만들었어요. 열어서 추가를 눌러 주세요. 하루 전, 30분 전, 나갈 때 알려 드려요.", { force: true });
+    });
+    main.append(talkB);
+    const extra = [row(ics, btn("🔊 들려주기", "btn-light", sayPlan))];
+    if (G.list().length) extra.push(btn("👪 보호자에게 일정 알리기", "btn-light", () => { r = calc(); notifyGuardians("start", `${md(r.appt)} ${hm(r.appt)}에 ${taxiDest().name} 진료가 있어요. ${hm(r.leave)}에 출발할게요.`, { force: true, urgent: true }); }));
+    dock.replaceChildren(btn("✅ 이대로 할게요", "btn-xl btn-primary", () => { sayPlan(); go(backOf.plan || "talk"); }), ...extra);
+    sayPlan();
+  }
+  function planBanner() {
+    const p = store.get("plan", null); if (!p) return "";
+    const appt = new Date(p.appt), leave = new Date(p.leave);
+    if (appt < new Date()) return "";
+    return `<button class="card plan-banner" id="planBanner">⏰ <b>${md(appt)} ${hm(appt)}</b> 진료 · <b>${hm(leave)}</b>에 출발</button>`;
+  }
+
+  // ───────────────────────── 1. 사진으로 "여기가 어디예요?" ─────────────────────────
+  const SIGN_HINTS = [
+    [/처음\s*오신|초진|첫\s*방문/, "‘처음오신 분’ 표지판이에요. 이 표지판 화살표 방향으로 가세요."],
+    [/1\s*동/, "1동이라고 쓰여 있어요. 분당서울대병원 1동 근처예요."],
+    [/엘리베이터|승강기|elevator/i, "엘리베이터 표지판이에요. 보행기·휠체어는 엘리베이터를 이용하세요."],
+    [/수납|원무/, "수납 창구 표지판이에요. 진료가 끝나면 여기서 돈을 내요."],
+    [/약국|약제/, "약국 표지판이에요."],
+    [/응급/, "응급실 표지판이에요."],
+    [/화장실|toilet|restroom/i, "화장실 표지판이에요."],
+    [/출구|나가는|exit/i, "나가는 곳 표지판이에요."],
+    [/미금역|3\s*번\s*출구/, "미금역 3번 출구 근처예요. 마을버스 정류장은 가까이 있어요."],
+    [/7\s*-\s*1|서울대병원/, "7-1번 또는 서울대병원 글자가 보여요. 버스 정류장이 맞아요."],
+    [/접수|외래/, "접수·외래 표지판이에요."]
+  ];
+  let tessLoading = null;
+  function loadTesseract() {
+    if (window.Tesseract) return Promise.resolve();
+    if (tessLoading) return tessLoading;
+    tessLoading = new Promise((ok, no) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+      sc.onload = ok; sc.onerror = no; document.head.append(sc);
+    });
+    return tessLoading;
+  }
+  async function shrinkImage(file, max = 1280) {
+    const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = URL.createObjectURL(file); });
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c;
+  }
+  async function readPhoto(file) {
+    const out = $("#whereOut");
+    out.innerHTML = `<p class="big" style="font-size:24px">사진을 읽는 중이에요…</p><p class="muted" id="ocrProg"></p>`;
+    speak("사진을 읽는 중이에요. 잠깐만 기다려 주세요.");
+    const canvas = await shrinkImage(file);
+    $("#wherePreview").src = canvas.toDataURL("image/jpeg", 0.8); $("#wherePreview").hidden = false;
+    const ctx = state.screen === "where" ? (backOf.where === "indoor" ? "분당서울대병원 1동 안, 처음오신 창구를 찾는 중" : backOf.where === "outdoor" ? `${RT().outdoor[state.outIdx] ? RT().outdoor[state.outIdx].place : ""}(으)로 가는 중` : "") : "";
+    // 1순위: 서버 AI (사진 이해)
+    if (server.ai) {
+      try {
+        const r = await fetch("api/vision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: canvas.toDataURL("image/jpeg", 0.7), context: ctx }) });
+        if (r.ok) { const j = await r.json(); return showWhere(j.answer, j.text || ""); }
+      } catch {}
+    }
+    // 2순위: 휴대폰 안에서 글자 읽기 (처음 한 번 글자 사전을 내려받아요)
+    try {
+      await loadTesseract();
+      const res = await Tesseract.recognize(canvas, "kor+eng", { logger: m => { const p = $("#ocrProg"); if (p && m.progress != null) p.textContent = `${m.status === "recognizing text" ? "글자 읽는 중" : "준비 중"} ${Math.round(m.progress * 100)}%`; } });
+      const text = (res.data.text || "").replace(/[^\S\n]+/g, " ").split("\n").map(x => x.trim()).filter(x => x.length > 1).join("\n");
+      const hints = SIGN_HINTS.filter(([re]) => re.test(text)).map(([, h]) => h);
+      const answer = hints.length ? hints.slice(0, 2).join(" ") : text ? "표지판 글자를 읽었어요. 아래 글자를 확인해 보세요." : "글자를 찾지 못했어요. 표지판을 가까이서, 흔들리지 않게 다시 찍어 주세요.";
+      showWhere(answer, text);
+    } catch {
+      showWhere("사진을 읽지 못했어요. 인터넷 연결을 확인하거나, 도움 요청 버튼으로 직원분께 물어보세요.", "");
+    }
+  }
+  function showWhere(answer, text) {
+    const out = $("#whereOut"); if (!out) return;
+    out.innerHTML = `<p class="big" style="font-size:26px">${esc(answer)}</p>${text ? `<p class="muted" style="margin:10px 0 0">읽은 글자</p><p class="ocr-text">${esc(text).replace(/\n/g, "<br>")}</p>` : ""}`;
+    speak(answer + (text && text.length < 60 ? ` 표지판에는, ${text.replace(/\n/g, ", ")}, 라고 쓰여 있어요.` : ""), { force: true });
+  }
+  function renderWhere() {
+    setStep("📷 여기가 어디예요?", "표지판·간판을 찍어 주세요");
+    main.innerHTML = `
+      <section class="card"><p class="big" style="font-size:26px">주변 표지판이나 간판을<br>사진으로 찍어 주세요.</p>
+        <p class="muted" style="margin-top:6px">${server.ai ? "AI가 사진을 보고 어디인지 알려 드려요." : "휴대폰이 글자를 읽어 드려요. 처음 한 번은 글자 사전을 내려받느라 조금 걸려요."}</p></section>
+      <img id="wherePreview" class="where-img" alt="찍은 사진" hidden>
+      <section class="card" id="whereOut"><p class="muted">아직 사진이 없어요.</p></section>
+      <input type="file" id="whereFile" accept="image/*" capture="environment" hidden>`;
+    const f = $("#whereFile");
+    f.onchange = () => { if (f.files[0]) readPhoto(f.files[0]); f.value = ""; };
+    dock.replaceChildren(btn("📷 사진 찍기", "btn-xl btn-talk", () => f.click()), row(helpBtn(), backBtnTo("where")));
+    speak("주변의 표지판이나 간판을 사진으로 찍어 주세요. 어디인지 알려 드릴게요.");
+  }
+
+  // ───────────────────────── 12. 보호자 실시간 위치 보기 (암호화) ─────────────────────────
+  // 위치는 휴대폰에서 암호화해서 ntfy.sh(무료 알림 중계)에 올리고, 열쇠는 링크의 # 뒤에만 있어서 중계 서버도 못 읽어요.
+  const LIVE = { timer: null, watch: null, last: null, lastAt: 0 };
+  const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const ub64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+  async function liveKey() {
+    let k = store.get("liveKey", null);
+    if (!k) {
+      const topic = "hg" + b64u(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
+      const raw = await crypto.subtle.exportKey("raw", await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]));
+      k = { topic, key: b64u(raw) }; store.set("liveKey", k);
+    }
+    return k;
+  }
+  async function liveLink() {
+    const k = await liveKey();
+    return new URL(`family.html#${k.topic}.${k.key}`, location.href).href;
+  }
+  async function livePublish(force) {
+    if (!nav.pos) return;
+    const now = Date.now();
+    if (!force && LIVE.last && distanceM(LIVE.last, nav.pos) < 15 && now - LIVE.lastAt < 60000) return;
+    const k = await liveKey();
+    const where = state.screen === "outdoor" ? `${RT().outdoor[state.outIdx] ? RT().outdoor[state.outIdx].place : ""}(으)로 가는 중`
+      : state.screen === "indoor" ? "병원 안 · 창구 찾는 중" : state.screen === "done" ? "도착했어요" : state.screen === "doctor" ? "진료 중" : "";
+    const msg = JSON.stringify({ lat: +nav.pos.lat.toFixed(6), lng: +nav.pos.lng.toFixed(6), acc: Math.round(nav.acc || 0), t: now, where, dest: taxiDest().name });
+    const key = await crypto.subtle.importKey("raw", ub64u(k.key), "AES-GCM", false, ["encrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(msg));
+    try {
+      await fetch(`https://ntfy.sh/${k.topic}`, { method: "POST", body: b64u(iv) + "." + b64u(ct) });
+      LIVE.last = { ...nav.pos }; LIVE.lastAt = now;
+      const st = $("#liveState"); if (st) st.textContent = `마지막으로 보낸 시각 ${hm(new Date(now))}`;
+    } catch {}
+  }
+  function liveStart() {
+    store.set("liveOn", { until: Date.now() + 6 * 3600 * 1000 });
+    document.body.classList.add("sharing");
+    if ("geolocation" in navigator && LIVE.watch == null)
+      LIVE.watch = navigator.geolocation.watchPosition(p => { nav.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; nav.acc = p.coords.accuracy; livePublish(); }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+    clearInterval(LIVE.timer); LIVE.timer = setInterval(() => {
+      const on = store.get("liveOn", null);
+      if (!on || Date.now() > on.until) return liveStop();
+      livePublish();
+    }, 30000);
+    setTimeout(() => livePublish(true), 1500);
+  }
+  function liveStop() {
+    store.set("liveOn", null); document.body.classList.remove("sharing");
+    clearInterval(LIVE.timer); LIVE.timer = null;
+    if (LIVE.watch != null) navigator.geolocation.clearWatch(LIVE.watch); LIVE.watch = null;
+  }
+  async function liveSection(container) {
+    const on = !!store.get("liveOn", null);
+    const sec = document.createElement("section"); sec.className = "card";
+    sec.innerHTML = `<p class="sum-title" style="font-size:22px">📡 실시간 위치 보여 주기</p>
+      <p class="muted" style="margin:4px 0 8px">켜 두면 보호자가 링크로 지금 어디쯤인지 지도에서 봐요. 위치는 <b>암호화</b>되어 보호자 링크로만 열려요. 6시간 뒤 자동으로 꺼져요.</p>
+      <p class="muted" id="liveState" style="margin:0 0 8px">${on ? "켜져 있어요" : "꺼져 있어요"}</p>`;
+    const r = document.createElement("div"); r.className = "row2";
+    r.append(
+      on ? btn("⏹ 공유 끄기", "btn-light", () => { liveStop(); speak("위치 보여 주기를 껐어요."); renderGuardian(); })
+         : btn("▶ 공유 켜기", "btn-primary", async () => { const lr = await requestLocation(); if (lr !== "granted") return speak("위치를 켜야 보여 줄 수 있어요."); liveStart(); speak("위치 보여 주기를 켰어요. 보호자에게 링크를 보내 주세요."); renderGuardian(); }),
+      btn("🔗 보호자에게 링크 보내기", "btn-light", async () => notifyGuardians("help", `내 위치를 지도에서 볼 수 있는 링크예요. 이 링크는 다른 사람에게 보내지 마세요.\n${await liveLink()}`, { force: true, urgent: true }))
+    );
+    sec.append(r);
+    sec.append(btn("🔄 링크 새로 만들기 (예전 링크 막기)", "btn-light", () => { if (confirm("새 링크를 만들면 예전 링크로는 더 이상 볼 수 없어요. 만들까요?")) { store.set("liveKey", null); speak("새 링크를 만들었어요. 보호자에게 다시 보내 주세요."); renderGuardian(); } }));
+    container.append(sec);
+  }
+  if (store.get("liveOn", null) && Date.now() < store.get("liveOn").until) liveStart();
+
+  // ───────────────────────── 3. 대화 모드 (말로만) ─────────────────────────
+  const CMD = [
+    [/119|응급(?!실)|숨이|가슴이|쓰러|많이\s*아파/, () => openSOS()],
+    [/다시|뭐라고|못\s*들었|한\s*번\s*더/, () => speak(state.lastSaid, { force: true })],
+    [/도와|길을?\s*잃|모르겠|헤매/, () => openHelp()],
+    [/버스.*(언제|몇\s*분|와|오)|몇\s*분\s*(뒤|남)/, () => sayBus()],
+    [/(다\s*왔|도착|내렸|탔어|했어|다음|됐어)/, () => cmdNext()],
+    [/이전|뒤로|돌아가/, () => cmdBack()],
+    [/여기.*어디|어디야|어디예요|어디에요|사진/, () => openScreen("where")],
+    [/택시/, () => openScreen("taxi")],
+    [/몇\s*시에?\s*(나가|출발)|출발\s*시간|언제\s*나가/, () => openScreen("plan")],
+    [/약국/, () => { near.kind = "hosp"; openNear("hosp"); }],
+    [/응급실/, () => openNear("er")],
+    [/병원.*(찾|가까운|근처)|가까운\s*병원/, () => openNear("hosp")],
+    [/진료\s*메모|받아\s*적|선생님\s*말씀/, () => openDoctor()],
+    [/딸|아들|보호자|가족|연락/, () => notifyGuardians("help", "연락 주세요. 지금 병원 가는 중이에요.", { force: true, urgent: true })],
+    [/영어|중국어|베트남|일본어|외국어|필담|안\s*들려/, () => openScreen("lang")],
+    [/소리\s*(꺼|끄)|조용/, () => { state.sound = false; save(); paintSound(); }],
+    [/소리\s*(켜|크게)/, () => { state.sound = true; save(); paintSound(); speak("소리를 켰어요."); }],
+    [/처음\s*(으로|화면)/, () => go("talk")]
+  ];
+  function cmdNext() {
+    if (state.screen === "outdoor") return nextOutdoor();
+    if (state.screen === "indoor") { state.inIdx++; save(); return renderIndoor(); }
+    const b = dock.querySelector(".btn-primary, .btn-xl"); if (b) b.click();
+  }
+  function cmdBack() { const b = [...document.querySelectorAll("button")].find(x => /이전|돌아가기/.test(x.textContent)); if (b) b.click(); }
+  async function sayBus() {
+    const st = RT().outdoor.find(x => x.bus);
+    if (!st || busBase() === null) return speak("지금은 버스 도착 정보를 볼 수 없어요. 정류장 안내판을 봐 주세요.", { force: true });
+    try {
+      const j = await (await fetch(`${busBase()}api/bus?stationId=${st.bus.stationId}`)).json();
+      const m = (j.items || []).find(x => String(x.routeId) === String(st.bus.routeId));
+      speak(m && m.buses.length ? `${st.bus.routeName}번 버스는 약 ${m.buses[0].min}분 뒤에 와요.` : `${st.bus.routeName}번은 지금 오는 버스가 없어요. 정류장에서 출발을 기다리는 버스예요.`, { force: true });
+    } catch { speak("버스 정보를 가져오지 못했어요.", { force: true }); }
+  }
+  function runCommand(t) {
+    const hit = CMD.find(([re]) => re.test(t.replace(/\s+/g, " ")));
+    if (hit) { vibrate(40); hit[1](); return true; }
+    // 화면 안 버튼 글자와 비슷하면 눌러 주기
+    const words = t.replace(/\s/g, "");
+    const b = [...document.querySelectorAll("#dock button, #main button")].find(x => { const l = x.textContent.replace(/[^\p{L}\p{N}]/gu, ""); return l.length > 1 && (words.includes(l.slice(0, 4)) || l.includes(words.slice(0, 4))); });
+    if (b) { b.click(); return true; }
+    if (state.screen === "talk" || state.screen === "confirm") { handleUtterance(t); return true; }
+    speak("잘 못 알아들었어요. 다 왔어요, 버스 언제 와, 도와줘, 처럼 말씀해 주세요.", { force: true });
+    return false;
+  }
+  const fab = document.createElement("button");
+  fab.id = "fab"; fab.className = "fab"; fab.setAttribute("aria-label", "말로 하기"); fab.innerHTML = "🎙";
+  document.body.append(fab);
+  fab.onclick = () => listen(runCommand, fab);
+  new ResizeObserver(() => document.documentElement.style.setProperty("--dockH", dock.offsetHeight + "px")).observe(dock);
+  // 계속 듣기: 안내 말이 끝나면 자동으로 다시 들음
+  const HF = { on: store.get("handsfree", false), busy: false };
+  function hfListen() {
+    if (!HF.on || activeRec || !SR || document.hidden) return;
+    if ($("#typeSheet")) return;
+    listen((t) => { runCommand(t); }, fab, { quiet: true, onIdle: () => setTimeout(hfListen, 700) });
+  }
+  window.addEventListener("hg:spoken", () => { if (HF.on) setTimeout(hfListen, 500); });
+  window.addEventListener("hg:speaking", () => { if (activeRec && HF.on) activeRec.abort(); });
+  function setHandsfree(v) { HF.on = v; store.set("handsfree", v); fab.classList.toggle("hf", v); if (v) { speak("말로만 하기를 켰어요. 안내가 끝나면 제가 들을게요. 다 왔어요, 버스 언제 와, 도와줘, 처럼 말씀하세요.", { force: true }); } else if (activeRec) activeRec.abort(); }
+  fab.classList.toggle("hf", HF.on);
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
+    // 큰 "누르고 말하기" 버튼이 이미 있는 화면에서는 떠 있는 마이크를 숨김
+    const f = $("#fab"); if (f) f.hidden = ["talk", "perm"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
-    ({ guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    ({ lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
@@ -1483,6 +1929,10 @@
   $("#reduceMotion").onchange = (e) => { state.reduce = e.target.checked; save(); document.body.classList.toggle("reduce", state.reduce); };
   $("#testVoice").onclick = () => speak("안녕하세요. 병원 한걸음이에요. 천천히, 한 걸음씩 같이 가요.", { force: true });
   $("#guardianBtn").onclick = openGuardian;
+  $("#hfToggle").checked = HF.on;
+  $("#hfToggle").onchange = (e) => setHandsfree(e.target.checked);
+  $("#helpWhere").onclick = () => openScreen("where");
+  $("#helpLang").onclick = () => openScreen("lang");
   $("#sosGuardian").onclick = () => { $("#sos").hidden = true; notifyGuardians("help", "도움이 필요해요! 119에 전화하려고 해요. 연락 주세요.", { force: true, urgent: true }); };
   $("#helpGuardian").onclick = () => { $("#helpCard").hidden = true; notifyGuardians("help", `길을 잃었어요. ${state.screen === "indoor" ? "분당서울대병원 1동 안이에요." : ""} 연락 주세요.`, { force: true, urgent: true }); };
   $("#permAgain").onclick = () => { $("#settings").hidden = true; perm.loc = perm.mic = perm.compass = "unknown"; go("perm"); };

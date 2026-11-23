@@ -226,9 +226,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(503, {"error": "OPENAI_API_KEY 없음"})
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(min(n, 10000)) or b"{}")
+            body = json.loads(self.rfile.read(min(n, 4_000_000)) or b"{}")
             text = str(body.get("text", ""))[:8000]
-            if not text:
+            if not text and self.path != "/api/vision":
                 return self._json(400, {"error": "text 없음"})
 
             if self.path == "/api/parse":
@@ -264,6 +264,23 @@ class Handler(SimpleHTTPRequestHandler):
                     v = out.get(k) or []
                     clean[k] = [str(x)[:300] for x in v if isinstance(x, (str, int, float))][:8] if isinstance(v, list) else []
                 return self._json(200, clean)
+
+            if self.path == "/api/vision":
+                img = str(body.get("image", ""))
+                if not img.startswith("data:image/") or len(img) > 3_000_000:
+                    return self._json(400, {"error": "image 필요"})
+                ctx = str(body.get("context", ""))[:200]
+                res = openai("chat/completions", {
+                    "model": "gpt-4o-mini", "temperature": 0, "response_format": {"type": "json_object"},
+                    "messages": [
+                        {"role": "system", "content": "너는 길을 잃은 어르신을 돕는 도우미야. 사진 속 표지판·간판 글자를 읽고, "
+                         "어디인지와 지금 할 일 한 가지를 쉬운 존댓말 두 문장 이내로 알려 줘. 보이지 않는 것은 지어내지 마. "
+                         'JSON으로만: {"answer": 안내 문장, "text": 사진에서 읽은 글자}'},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": f"상황: {ctx or '병원 가는 길'}"},
+                            {"type": "image_url", "image_url": {"url": img, "detail": "low"}}]}]})
+                out = json.loads(res["choices"][0]["message"]["content"])
+                return self._json(200, {"answer": str(out.get("answer", ""))[:300], "text": str(out.get("text", ""))[:500]})
 
             if self.path == "/api/tts":
                 speed = float(body.get("speed", 0.92))

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b">
   <title>병원한걸음</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
   <header class="topbar">
@@ -30,6 +30,7 @@
     <div class="help-inner">
       <p class="help-small">직원분께 보여 드리세요</p>
       <p id="helpText" class="help-text"></p>
+      <div class="row2 help-more"><button id="helpWhere" class="btn btn-light">📷 사진으로 묻기</button><button id="helpLang" class="btn btn-light">🌐 외국어·필담</button></div>
       <button id="helpGuardian" class="btn btn-xl btn-light" hidden>👪 보호자에게 알리기</button>
       <button id="helpClose" class="btn btn-xl btn-light">닫기</button>
     </div>
@@ -63,6 +64,7 @@
       </label>
       <label class="field row"><input id="demoToggle" type="checkbox"> 시연 모드 (GPS 없이 걸어가는 것처럼 흉내)</label>
       <label class="field row"><input id="reduceMotion" type="checkbox"> 움직임 줄이기</label>
+      <label class="field row"><input id="hfToggle" type="checkbox"> 🎙 말로만 하기 (안내가 끝나면 자동으로 들어요)</label>
       <p id="engineInfo" class="muted"></p>
       <div class="row gap">
         <button id="testVoice" class="btn btn-light">목소리 들어보기</button>
@@ -75,8 +77,8 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="config.js?v=11"></script>
-  <script src="route.js?v=11"></script>
-  <script src="app.js?v=11"></script>
+  <script src="config.js?v=12"></script>
+  <script src="route.js?v=12"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

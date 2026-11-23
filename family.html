@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>가족 위치 보기</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <style>
+    :root { --bg: #f6f4ee; --card: #fff; --ink: #15201c; --muted: #55625d; --primary: #0b5d4b; --line: #d9d4c7; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #101614; --card: #1b2421; --ink: #f2f5f3; --muted: #a9b6b1; --primary: #3ccf9f; --line: #2f3b37; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; word-break: keep-all; }
+    header { padding: 14px 16px 6px; display: flex; justify-content: space-between; align-items: center; }
+    h1 { font-size: 22px; margin: 0; } h1 b { color: var(--primary); }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+    .card { background: var(--card); border: 2px solid var(--line); border-radius: 20px; padding: 16px; }
+    .where { font-size: 24px; font-weight: 800; margin: 0; }
+    .muted { color: var(--muted); margin: 4px 0 0; font-size: 16px; }
+    .stale { color: #b35c00; font-weight: 700; }
+    #map { height: 55vh; min-height: 320px; border-radius: 20px; border: 2px solid var(--line); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    a.btn { display: flex; align-items: center; justify-content: center; min-height: 56px; border-radius: 16px; font-weight: 800; font-size: 18px; text-decoration: none; background: var(--primary); color: #fff; }
+    a.btn.light { background: var(--card); color: var(--ink); border: 2px solid var(--line); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #aaa; margin-right: 6px; }
+    .dot.live { background: #1e8a4c; box-shadow: 0 0 0 4px rgba(30,138,76,.2); }
+    .me-dot span { display: block; width: 26px; height: 26px; border-radius: 50%; background: #1a73e8; border: 4px solid #fff; box-shadow: 0 0 0 8px rgba(26,115,232,.25); }
+  </style>
+</head>
+<body>
+  <header><h1>병원<b>한걸음</b> · 가족 위치</h1><span id="conn"><span class="dot"></span>연결 중</span></header>
+  <div class="wrap">
+    <section class="card"><p class="where" id="where">위치를 기다리는 중이에요…</p><p class="muted" id="when"></p></section>
+    <div id="map"></div>
+    <div class="row"><a class="btn" id="kakao" href="#" target="_blank" rel="noopener">카카오맵으로 보기</a><a class="btn light" id="refresh" href="#">새로고침</a></div>
+    <p class="muted">🔒 위치는 암호화되어 이 링크로만 열려요. 링크를 다른 사람에게 보내지 마세요.</p>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+  (() => {
+    const [topic, keyStr] = (location.hash.slice(1) || "").split(".");
+    const $ = s => document.querySelector(s);
+    if (!topic || !keyStr || !/^hg[A-Za-z0-9]+$/.test(topic)) { $("#where").textContent = "링크가 올바르지 않아요. 보내 준 링크를 다시 열어 주세요."; return; }
+    const ub = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+    let key, map, marker, circle, last = null;
+    const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "방금 전" : m < 60 ? `${m}분 전` : `${Math.floor(m / 60)}시간 ${m % 60}분 전`; };
+    async function decrypt(msg) {
+      const [iv, ct] = msg.split(".");
+      const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ub(iv) }, key, ub(ct));
+      return JSON.parse(new TextDecoder().decode(pt));
+    }
+    function show(p) {
+      if (last && p.t <= last.t) return;
+      last = p;
+      const ll = [p.lat, p.lng];
+      if (!map) {
+        map = L.map("map").setView(ll, 17);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+        marker = L.marker(ll, { icon: L.divIcon({ className: "me-dot", html: "<span></span>", iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(map);
+        circle = L.circle(ll, { radius: p.acc || 10, color: "#1a73e8", weight: 1, fillOpacity: .1 }).addTo(map);
+      } else { marker.setLatLng(ll); circle.setLatLng(ll).setRadius(p.acc || 10); map.panTo(ll); }
+      $("#where").textContent = p.where ? p.where : `${p.dest || "병원"} 가는 중`;
+      $("#kakao").href = `https://map.kakao.com/link/map/%EC%9C%84%EC%B9%98,${p.lat},${p.lng}`;
+      tick();
+    }
+    function tick() {
+      if (!last) return;
+      const old = Date.now() - last.t > 10 * 60000;
+      $("#when").innerHTML = `${ago(last.t)} 위치 · 오차 약 ${last.acc || "?"}m${old ? ' · <span class="stale">10분 넘게 새 위치가 없어요. 휴대폰이 꺼졌거나 공유가 꺼졌을 수 있어요.</span>' : ""}`;
+    }
+    async function handle(raw) { try { show(await decrypt(raw)); } catch { /* 다른 열쇠의 글은 무시 */ } }
+    (async () => {
+      try { key = await crypto.subtle.importKey("raw", ub(keyStr), "AES-GCM", false, ["decrypt"]); }
+      catch { $("#where").textContent = "링크가 올바르지 않아요."; return; }
+      // 최근 위치 먼저 불러오기
+      try {
+        const txt = await (await fetch(`https://ntfy.sh/${topic}/json?poll=1&since=6h`)).text();
+        for (const line of txt.trim().split("\n").filter(Boolean)) { const j = JSON.parse(line); if (j.event === "message") await handle(j.message); }
+      } catch {}
+      if (!last) $("#where").textContent = "아직 위치가 없어요. 어르신 휴대폰에서 ‘공유 켜기’를 눌렀는지 확인해 주세요.";
+      // 실시간으로 새 위치 받기
+      const es = new EventSource(`https://ntfy.sh/${topic}/sse`);
+      es.onopen = () => { $("#conn").innerHTML = '<span class="dot live"></span>실시간'; };
+      es.onerror = () => { $("#conn").innerHTML = '<span class="dot"></span>다시 연결 중'; };
+      es.onmessage = e => { try { const j = JSON.parse(e.data); if (j.event === "message") handle(j.message); } catch {} };
+      setInterval(tick, 30000);
+    })();
+    $("#refresh").onclick = e => { e.preventDefault(); location.reload(); };
+  })();
+  </script>
+</body>
+</html>
