@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>병원한걸음 QR</title>
+  <style>
+    :root { --ink: #15201c; --bg: #f6f4ee; --primary: #0b5d4b; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink);
+      font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; text-align: center; padding: 16px; box-sizing: border-box; word-break: keep-all; }
+    .card { background: #fff; border-radius: 28px; padding: 32px 24px; max-width: 520px; width: 100%; box-shadow: 0 6px 30px rgba(0,0,0,.08); }
+    h1 { margin: 0 0 4px; font-size: 40px; } h1 b { color: var(--primary); }
+    p { font-size: 22px; margin: 8px 0; }
+    img { width: min(80vw, 380px); height: auto; image-rendering: pixelated; margin: 16px 0; }
+    .url { font-size: 16px; color: #55625d; word-break: break-all; }
+    .tip { font-size: 18px; background: #fff3cd; border-radius: 14px; padding: 10px 14px; margin-top: 14px; }
+    @media print { body { background: #fff; } .card { box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>병원<b>한걸음</b></h1>
+    <p>휴대폰 카메라로 찍어 주세요</p>
+    <img src="qr.png" alt="병원한걸음 웹앱 QR 코드">
+    <p class="url">https://20140625jian-svg.github.io/hangeoreum/</p>
+    <p class="tip">카카오톡으로 찍었다면 <b>Safari / Chrome으로 열기</b>를 눌러야<br>마이크와 위치가 잘 돼요.</p>
+  </div>
+</body>
+</html>

@@ -124,29 +124,70 @@
 
   // ───────────────────────── 음성 인식 ─────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // 말하기: 브라우저 음성 인식 → 안 되면 휴대폰 키보드의 🎤(받아쓰기)로 대신 입력
+  let activeRec = null;
   function listen(onText, btn) {
-    if (!SR) { alert("이 브라우저는 음성 인식을 지원하지 않아요. 아래 버튼으로 골라 주세요."); return; }
+    if (activeRec) { activeRec.stop(); return; }           // 한 번 더 누르면 멈춤
+    if (!SR || !isSecureContext) return typeFallback(onText, "이 브라우저는 바로 듣기를 지원하지 않아요.");
     stopSpeaking();
-    const rec = new SR();
+    const label = btn.dataset.label || (btn.dataset.label = btn.innerHTML);
+    let rec;
+    try { rec = new SR(); } catch { return typeFallback(onText); }
     rec.lang = "ko-KR"; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
-    let finalText = "";
-    btn.classList.add("listening"); btn.textContent = "🎙 듣고 있어요… (다 말하면 잠깐 멈추세요)";
+    let text = "", errored = "", silenceT = null, gotAny = false;
+    const maxT = setTimeout(() => rec.stop(), 15000);
+    const armSilence = () => { clearTimeout(silenceT); silenceT = setTimeout(() => rec.stop(), 2200); };
+    btn.classList.add("listening"); btn.innerHTML = "🎙 듣고 있어요… 말씀하세요<br><small>다 말하면 다시 누르세요</small>";
+    rec.onstart = () => vibrate(40);
     rec.onresult = (e) => {
       let t = ""; for (const r of e.results) t += r[0].transcript;
-      finalText = t;
-      const q = $("#heardLive"); if (q) q.textContent = "“" + t + "”";
+      text = t; gotAny = true; armSilence();
+      const q = $("#heardLive"); if (q) { q.hidden = false; q.textContent = "“" + t + "”"; }
     };
-    rec.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        speak("마이크가 꺼져 있어요. 마이크 켜는 방법을 보여 드릴게요.");
-        setTimeout(() => { if (confirm("마이크 권한이 꺼져 있어요. 켜는 방법을 볼까요?")) go("perm"); }, 300);
-      }
-    };
+    rec.onerror = (e) => { errored = e.error || "error"; };
     rec.onend = () => {
-      btn.classList.remove("listening"); btn.textContent = "🎙 누르고 말하기";
-      if (finalText.trim()) onText(finalText.trim());
+      activeRec = null; clearTimeout(maxT); clearTimeout(silenceT);
+      btn.classList.remove("listening"); btn.innerHTML = label;
+      if (text.trim()) return onText(text.trim());
+      if (errored === "not-allowed" || errored === "service-not-allowed") {
+        const why = isIOS
+          ? "마이크나 받아쓰기가 꺼져 있어요. 설정 → Safari → 마이크 ‘허용’, 그리고 설정 → 일반 → 키보드 → ‘받아쓰기 활성화’를 켜 주세요."
+          : "마이크가 꺼져 있어요. 주소창 왼쪽 버튼 → 권한 → 마이크 ‘허용’을 눌러 주세요.";
+        speak(why);
+        return typeFallback(onText, why);
+      }
+      if (errored === "audio-capture") { speak("다른 앱이 마이크를 쓰고 있어요."); return typeFallback(onText, "다른 앱이 마이크를 쓰고 있어요. 통화나 녹음을 끄고 다시 해 보세요."); }
+      if (errored === "network" || errored === "language-not-supported") return typeFallback(onText, "인터넷이 약해서 바로 듣기가 안 돼요.");
+      if (errored === "aborted") return;
+      // no-speech 또는 아무 말도 못 들음
+      speak("잘 안 들렸어요. 노란 버튼을 누르고, 휴대폰에 입을 가까이 대고 말씀해 주세요.");
+      if (!gotAny) listen.miss = (listen.miss || 0) + 1;
+      if (listen.miss >= 2) { listen.miss = 0; typeFallback(onText, "잘 안 들려서 다른 방법으로 해 볼게요."); }
     };
-    rec.start();
+    activeRec = rec;
+    try { rec.start(); silenceT = setTimeout(() => rec.stop(), 7000); }
+    catch { activeRec = null; btn.classList.remove("listening"); btn.innerHTML = label; typeFallback(onText); }
+  }
+
+  // 대체 입력: 휴대폰 키보드의 🎤 버튼(받아쓰기)은 거의 모든 휴대폰에서 됩니다
+  function typeFallback(onText, reason = "") {
+    const old = $("#typeSheet"); if (old) old.remove();
+    const wrap = document.createElement("div");
+    wrap.id = "typeSheet"; wrap.className = "overlay sheet"; wrap.setAttribute("role", "dialog");
+    wrap.innerHTML = `<div class="sheet-inner">
+        ${reason ? `<p class="muted">${esc(reason)}</p>` : ""}
+        <p class="big" style="font-size:26px">아래 칸을 누르고,<br>키보드의 <span class="kbd">🎤</span> 버튼을 눌러 말씀하세요.</p>
+        <p class="muted">${isIOS ? "키보드 오른쪽 아래(또는 스페이스 옆)에 있는 마이크 모양이에요." : "키보드 위쪽 줄이나 오른쪽 위에 있는 마이크 모양이에요."} 글자로 써도 돼요.</p>
+        <textarea id="typeBox" rows="3" placeholder="예) 분당서울대병원 처음 가요"></textarea>
+        <button class="btn btn-xl btn-primary" id="typeOk">✅ 다 말했어요</button>
+        <button class="btn btn-light" id="typeCancel">닫기</button>
+      </div>`;
+    document.body.append(wrap);
+    const box = wrap.querySelector("#typeBox");
+    setTimeout(() => box.focus(), 50);
+    wrap.querySelector("#typeOk").onclick = () => { const t = box.value.trim(); wrap.remove(); if (t) onText(t); };
+    wrap.querySelector("#typeCancel").onclick = () => wrap.remove();
+    speak("아래 칸을 누르고, 키보드의 마이크 버튼을 눌러 말씀해 주세요.");
   }
 
   // ───────────────────────── AI 방문 조건 해석 ─────────────────────────
@@ -246,7 +287,7 @@
       </section>`;
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
     const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk));
-    dock.replaceChildren(talk, row(replayBtn(), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
+    dock.replaceChildren(talk, row(btn("⌨️ 키보드로 말하기", "btn-light", () => typeFallback(handleUtterance)), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
     speak("안녕하세요. 병원 한걸음입니다. 노란 버튼을 누르고, 어느 병원에 가시는지 편하게 말씀해 주세요.");
   }
   async function handleUtterance(text) {
