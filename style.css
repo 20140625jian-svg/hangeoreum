@@ -281,3 +281,20 @@ body.sharing .brand::after { content: "📡 공유 중"; font-size: 12px; font-w
 
 .fab[hidden] { display: none; }
 body:has(.fab:not([hidden])) .main { padding-bottom: 96px; }
+
+/* ── 화면 정리 ── */
+.hello { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+.hello .big { font-size: 30px; }
+.tiles-2 { grid-template-columns: 1fr 1fr; }
+.tiles-2 .tile { min-height: 118px; font-size: 40px; }
+.tiles-2 .tile span { font-size: 19px; }
+.resume { width: 100%; text-align: left; font-size: 22px; border: 3px solid var(--primary); background: var(--card); color: var(--ink); }
+.resume .muted { font-size: 17px; }
+.more-btn { width: 100%; flex-direction: column; gap: 0; font-size: 20px; }
+.more-btn small { font-size: 15px; font-weight: 600; color: var(--muted); }
+.menu-tiles { grid-template-columns: repeat(3, 1fr); }
+.menu-tiles .tile { min-height: 96px; font-size: 32px; }
+.chip-menu { font-weight: 800; }
+/* 글씨 더 크게 */
+html.big-text .main, html.big-text .dock { zoom: 1.15; }
+html.big-text .stepbar { font-size: 22px; }

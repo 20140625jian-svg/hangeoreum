@@ -18,7 +18,7 @@
   };
 
   const state = {
-    screen: store.get("screen", store.get("permDone", false) ? "talk" : "perm"),   // talk | confirm | apply | outdoor | indoor | done
+    screen: store.get("screen", store.get("permDone", false) ? "home" : "perm"),   // talk | confirm | apply | outdoor | indoor | done
     slots: store.get("slots", { hospital: null, firstVisit: null, mobility: null, reception: null }),
     heard: "",
     outIdx: store.get("outIdx", 0),
@@ -296,26 +296,12 @@
           <button class="btn btn-light" data-q="분당서울대병원 처음 가요. 보행기 쓰고 접수도 도와주세요">보행기 · 첫 방문</button>
           <button class="btn btn-light" data-q="분당서울대병원 처음 가요. 휠체어 타고 접수도 도와주세요">휠체어 · 첫 방문</button>
         </div>
-      </section>
-      ${planBanner()}
-      <div class="tiles">
-        <button class="tile" id="goNearH">🏥<span>가까운 병원</span></button>
-        <button class="tile" id="goNearE">🚑<span>가까운 응급실</span></button>
-        <button class="tile" id="goPlan">⏰<span>몇 시에 나갈까</span></button>
-        <button class="tile" id="goTaxi">🚕<span>택시 타기</span></button>
-        <button class="tile" id="goWhere">📷<span>여기가 어디?</span></button>
-        <button class="tile" id="goLang">🌐<span>외국어·필담</span></button>
-      </div>`;
-    $("#goNearH").onclick = () => openNear("hosp"); $("#goNearE").onclick = () => openNear("er");
-    $("#goPlan").onclick = () => openScreen("plan"); $("#goTaxi").onclick = () => openScreen("taxi");
-    $("#goWhere").onclick = () => openScreen("where"); $("#goLang").onclick = () => openScreen("lang");
-    const pb = $("#planBanner"); if (pb) pb.onclick = () => openScreen("plan");
-    const gb = btn(G.list().length ? `👪 보호자 ${G.list().length}명 연결됨 · 바꾸기` : "👪 보호자(가족) 번호 등록하기", "btn-light", openGuardian);
-    main.append(gb);
+      </section>`;
+    main.append(btn("⬅ 처음 화면", "btn-light", () => go("home")));
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
     const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk));
     dock.replaceChildren(talk, row(btn("⌨️ 키보드로 말하기", "btn-light", () => typeFallback(handleUtterance)), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
-    speak("안녕하세요. 병원 한걸음입니다. 노란 버튼을 누르고, 어느 병원에 가시는지 편하게 말씀해 주세요.");
+    speak("노란 버튼을 누르고, 어느 병원에 가시는지 편하게 말씀해 주세요.");
   }
   async function handleUtterance(text) {
     state.heard = text;
@@ -539,7 +525,7 @@
       btn("⬅ 이전 지점", "btn-light", () => { if (state.outIdx > 0) { state.outIdx--; save(); renderOutdoor(); } else go("pick"); }),
       isPreset() ? btn("🏥 1동에 들어왔어요", "btn-light", () => { state.inIdx = 0; go("indoor"); })
                  : btn("🗺 목적지 바꾸기", "btn-light", () => go("pick"))
-    ), row(btn("📷 여기가 어디?", "btn-light", () => openScreen("where")), btn("🚕 택시 타기", "btn-light", () => openScreen("taxi"))));
+    ), btn("☰ 택시 · 여기가 어디 · 다른 도움", "btn-light more-btn", openMenu));
 
     // 센서 권한: iOS 는 버튼 눌러야 함
     const needsTap = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
@@ -657,7 +643,7 @@
       </section>
       <section class="sign">🪧 ${step.sign}</section>
       <section class="card"><p class="muted">소리를 꺼도 화면 글씨와 버튼만으로 끝까지 갈 수 있어요. 마지막으로 확인한 곳을 기억해 둡니다.</p></section>`;
-    main.append(row(btn("📷 표지판 찍어 묻기", "btn-light", () => openScreen("where")), btn("🌐 외국어·필담", "btn-light", () => openScreen("lang"))));
+    main.append(btn("📷 표지판 찍어서 물어보기", "btn-light", () => openScreen("where")));
     dock.replaceChildren(
       btn(i === RT().indoor.length - 1 ? "✅ 창구에 도착했어요" : "👍 했어요 · 다음", "btn-xl btn-primary", () => { state.inIdx++; save(); vibrate(60); renderIndoor(); }),
       row(replayBtn(), btn("⬅ 이전 단계", "btn-light", () => { if (state.inIdx > 0) { state.inIdx--; save(); renderIndoor(); } else { state.outIdx = RT().outdoor.length - 1; go("outdoor"); } })),
@@ -677,7 +663,7 @@
     }
     main.innerHTML = `<section class="card"><p class="big">처음오신 창구에<br>잘 도착하셨어요. 👏</p>
       <p style="margin-top:12px">번호가 불리면 창구에서 <b>“오늘 예약하고 처음 왔어요”</b> 라고 말씀하세요.</p></section>`;
-    dock.replaceChildren(btn("🩺 진료 받을 때 말씀 받아 적기", "btn-xl btn-talk", openDoctor), row(btn("🏠 처음 화면으로", "btn-light", () => resetAll()), helpBtn()));
+    dock.replaceChildren(btn("🩺 진료 받을 때 말씀 받아 적기", "btn-xl btn-talk", openDoctor), row(btn("🏠 처음 화면으로", "btn-light", () => { store.set("trip", null); go("home"); }), helpBtn()));
     speak("처음오신 창구에 잘 도착하셨어요. 정말 수고 많으셨어요. 번호가 불리면 창구에서, 오늘 예약하고 처음 왔다고 말씀하세요.");
     setTimeout(() => notifyGuardians("counter", "분당서울대병원 1동 1층 처음오신 창구에 잘 도착했어요. 이제 접수해요."), 7000);
   }
@@ -768,7 +754,7 @@
       speak(perm.loc === "granted" && perm.mic === "granted" ? "모두 켜졌어요. 다음 버튼을 눌러 주세요." : "꺼진 것이 있어요. 화면의 방법대로 켜 주세요.");
       renderPerm();
     });
-    const next = btn(allOn ? "다음 ▶" : "나중에 할게요 ▶", allOn ? "btn-xl btn-primary" : "btn-light", () => { store.set("permDone", true); go(state.slots.hospital ? "pick" : "talk"); });
+    const next = btn(allOn ? "다음 ▶" : "나중에 할게요 ▶", allOn ? "btn-xl btn-primary" : "btn-light", () => { store.set("permDone", true); go("home"); });
     dock.replaceChildren(...(allOn ? [next] : [all, row(replayBtn(), next)]));
     if (!renderPerm.spoken) { renderPerm.spoken = true; speak("길 안내를 하려면 위치와 마이크를 켜야 해요. 노란 버튼을 누르고, 휴대폰이 물어보면 허용을 눌러 주세요."); }
   }
@@ -1050,7 +1036,7 @@
 
   function renderDoctor() {
     setStep("🩺 진료 내용 쉽게 듣기", doc.phase === "rec" ? "받아 적는 중" : doc.phase === "summary" ? "쉬운 말 정리" : "");
-    const backBtn = btn("⬅ 돌아가기", "btn-light", () => { docStopRec(); go(doc.back || "talk"); });
+    const backBtn = btn("⬅ 돌아가기", "btn-light", () => { docStopRec(); go(doc.back || "home"); });
 
     if (doc.phase === "intro") {
       main.innerHTML = `
@@ -1278,7 +1264,7 @@
     main.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { near.kind = b.dataset.k; renderNear(); });
     dock.replaceChildren(
       ...(near.kind === "er" ? [btn("🚨 119 전화", "btn-xl btn-sos", openSOS)] : []),
-      row(btn("🔄 다시 찾기", "btn-light", loadNear), btn("⬅ 돌아가기", "btn-light", () => go(near.back || "talk")))
+      row(btn("🔄 다시 찾기", "btn-light", loadNear), btn("⬅ 돌아가기", "btn-light", () => go(near.back || "home")))
     );
     loadNear();
   }
@@ -1461,7 +1447,7 @@
     main.querySelectorAll("[data-ev]").forEach(c => c.onchange = () => G.setOpt(c.dataset.ev, c.checked));
     dock.replaceChildren(
       ...(list.length ? [btn("📩 시험 문자 보내 보기", "btn-xl btn-primary", () => notifyGuardians("test", "병원한걸음 보호자 알림 시험이에요. 병원 갈 때 이렇게 알려 드려요.", { force: true, urgent: true }))] : []),
-      btn("⬅ 돌아가기", "btn-light", () => go(G.back || "talk"))
+      btn("⬅ 돌아가기", "btn-light", () => go(G.back || "home"))
     );
     if (!list.length) speak("가족 번호를 등록하면, 병원 가는 동안 출발하고 도착할 때마다 문자로 알릴 수 있어요.");
   }
@@ -1470,12 +1456,12 @@
   // ───────────────────────── 화면 이동 공통 (돌아갈 곳 기억) ─────────────────────────
   const backOf = {};
   function openScreen(name) {
-    if (state.screen !== name) backOf[name] = ["lang", "taxi", "plan", "where"].includes(state.screen) ? (backOf[state.screen] || "talk") : state.screen;
+    if (state.screen !== name) backOf[name] = ["lang", "taxi", "plan", "where"].includes(state.screen) ? (backOf[state.screen] || "home") : state.screen;
     ["#settings", "#sos", "#helpCard"].forEach(id => { const el = $(id); if (el) el.hidden = true; });
     const gs = $("#gSheet"); if (gs) gs.remove();
     go(name);
   }
-  const backBtnTo = (name) => btn("⬅ 돌아가기", "btn-light", () => go(backOf[name] || "talk"));
+  const backBtnTo = (name) => btn("⬅ 돌아가기", "btn-light", () => go(backOf[name] || "home"));
 
   // ───────────────────────── 11. 외국어 카드 · 필담 ─────────────────────────
   const LANGS = {
@@ -1667,7 +1653,7 @@
     main.append(talkB);
     const extra = [row(ics, btn("🔊 들려주기", "btn-light", sayPlan))];
     if (G.list().length) extra.push(btn("👪 보호자에게 일정 알리기", "btn-light", () => { r = calc(); notifyGuardians("start", `${md(r.appt)} ${hm(r.appt)}에 ${taxiDest().name} 진료가 있어요. ${hm(r.leave)}에 출발할게요.`, { force: true, urgent: true }); }));
-    dock.replaceChildren(btn("✅ 이대로 할게요", "btn-xl btn-primary", () => { sayPlan(); go(backOf.plan || "talk"); }), ...extra);
+    dock.replaceChildren(btn("✅ 이대로 할게요", "btn-xl btn-primary", () => { sayPlan(); go(backOf.plan || "home"); }), ...extra);
     sayPlan();
   }
   function planBanner() {
@@ -1843,7 +1829,7 @@
     [/영어|중국어|베트남|일본어|외국어|필담|안\s*들려/, () => openScreen("lang")],
     [/소리\s*(꺼|끄)|조용/, () => { state.sound = false; save(); paintSound(); }],
     [/소리\s*(켜|크게)/, () => { state.sound = true; save(); paintSound(); speak("소리를 켰어요."); }],
-    [/처음\s*(으로|화면)/, () => go("talk")]
+    [/처음\s*(으로|화면)|홈/, () => go("home")]
   ];
   function cmdNext() {
     if (state.screen === "outdoor") return nextOutdoor();
@@ -1888,20 +1874,90 @@
   function setHandsfree(v) { HF.on = v; store.set("handsfree", v); fab.classList.toggle("hf", v); if (v) { speak("말로만 하기를 켰어요. 안내가 끝나면 제가 들을게요. 다 왔어요, 버스 언제 와, 도와줘, 처럼 말씀하세요.", { force: true }); } else if (activeRec) activeRec.abort(); }
   fab.classList.toggle("hf", HF.on);
 
+  // ───────────────────────── 처음 화면 (한 번에 하나만 크게) ─────────────────────────
+  function tripInProgress() {
+    const t = store.get("trip", null);
+    return t && (t === "outdoor" || t === "indoor") ? t : null;
+  }
+  function renderHome() {
+    const now = new Date();
+    setStep("오늘", now.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" }));
+    const trip = tripInProgress();
+    const tripPlace = trip === "indoor" ? "병원 안 · 처음오신 창구" : (RT().outdoor[state.outIdx] || {}).place;
+    const gN = G.list().length;
+    main.innerHTML = `
+      <section class="card hello">
+        <p class="big">안녕하세요.<br>무엇을 도와드릴까요?</p>
+      </section>
+      ${planBanner()}
+      ${trip ? `<button class="card resume" id="resume">▶ <b>하던 길 안내 이어서</b><br><span class="muted">${esc(tripPlace || "")}</span></button>` : ""}
+      <div class="tiles tiles-2">
+        <button class="tile" data-go="near">🏥<span>가까운 병원·응급실</span></button>
+        <button class="tile" data-go="plan">⏰<span>몇 시에 나갈까</span></button>
+        <button class="tile" data-go="doctor">🩺<span>진료 메모</span></button>
+        <button class="tile" data-go="guardian">👪<span>${gN ? `보호자 ${gN}명` : "보호자 등록"}</span></button>
+      </div>
+      <button class="btn btn-light more-btn" id="moreTools">☰ 다른 도움 더 보기 <small>택시 · 여기가 어디 · 외국어·필담</small></button>`;
+    main.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
+      const k = b.dataset.go;
+      if (k === "near") openNear("hosp"); else if (k === "doctor") openDoctor(); else if (k === "guardian") openGuardian(); else openScreen(k);
+    });
+    const pb = $("#planBanner"); if (pb) pb.onclick = () => openScreen("plan");
+    const rs = $("#resume"); if (rs) rs.onclick = () => go(trip);
+    $("#moreTools").onclick = openMenu;
+    dock.replaceChildren(btn("🚶 병원 가는 길 시작", "btn-xl btn-talk", () => go("talk")));
+    speak(trip ? "안녕하세요. 하던 길 안내를 이어서 하시려면 초록 테두리 버튼을 누르세요." : "안녕하세요. 병원 한걸음이에요. 병원에 가시려면 아래 노란 버튼을 누르세요.");
+  }
+
+  // ☰ 메뉴: 자주 안 쓰는 기능은 여기로 모음
+  function openMenu() {
+    const old = $("#menuSheet"); if (old) { old.remove(); return; }
+    const wrap = document.createElement("div");
+    wrap.id = "menuSheet"; wrap.className = "overlay sheet"; wrap.setAttribute("role", "dialog"); wrap.setAttribute("aria-modal", "true"); wrap.setAttribute("aria-label", "메뉴");
+    wrap.innerHTML = `<div class="sheet-inner"><p class="big" style="font-size:24px">무엇이 필요하세요?</p><div class="tiles menu-tiles"></div></div>`;
+    const items = [
+      ["🏠", "처음 화면", () => go("home")],
+      ["🚶", "병원 가는 길", () => go(tripInProgress() || "talk")],
+      ["🏥", "가까운 병원·응급실", () => openNear("hosp")],
+      ["⏰", "몇 시에 나갈까", () => openScreen("plan")],
+      ["🩺", "진료 메모", () => openDoctor()],
+      ["👪", "보호자", () => openGuardian()],
+      ["🚕", "택시 타기", () => openScreen("taxi")],
+      ["📷", "여기가 어디?", () => openScreen("where")],
+      ["🌐", "외국어·필담", () => openScreen("lang")],
+      ["🔠", state.big ? "글씨 보통으로" : "글씨 더 크게", () => setBig(!state.big)],
+      ["⚙︎", "설정 (목소리·권한)", () => openSettings()],
+      ["✖", "닫기", () => {}]
+    ];
+    const box = wrap.querySelector(".menu-tiles");
+    items.forEach(([ic, label, fn]) => {
+      const b = document.createElement("button"); b.className = "tile"; b.innerHTML = `${ic}<span>${label}</span>`;
+      b.onclick = () => { wrap.remove(); fn(); }; box.append(b);
+    });
+    wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+    document.body.append(wrap);
+  }
+  function setBig(v) { state.big = v; store.set("big", v); document.documentElement.classList.toggle("big-text", v); speak(v ? "글씨를 크게 했어요." : "글씨를 보통으로 했어요."); }
+  state.big = store.get("big", false);
+  document.documentElement.classList.toggle("big-text", state.big);
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
+    if (state.screen === "outdoor" || state.screen === "indoor") store.set("trip", state.screen);
+    if (state.screen === "done") store.set("trip", null);
+    const ms = $("#menuSheet"); if (ms) ms.remove();
     // 큰 "누르고 말하기" 버튼이 이미 있는 화면에서는 떠 있는 마이크를 숨김
-    const f = $("#fab"); if (f) f.hidden = ["talk", "perm"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
+    const f = $("#fab"); if (f) f.hidden = ["home", "talk", "perm"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
-    ({ lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    ({ home: renderHome, lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderHome)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
     stopSpeaking(); stopNav(); store.clear(); notified.clear();
-    Object.assign(state, { screen: "talk", slots: { hospital: null, firstVisit: null, mobility: null, reception: null }, heard: "", outIdx: 0, inIdx: 0, dest: null });
+    Object.assign(state, { screen: "home", slots: { hospital: null, firstVisit: null, mobility: null, reception: null }, heard: "", outIdx: 0, inIdx: 0, dest: null });
     nav.pos = null; nav.heading = null; save(); render();
   }
 
@@ -1916,8 +1972,8 @@
     $("#engineInfo").textContent =
       `말 알아듣기: ${server.ai ? "AI(GPT) 해석" : "기기 안 규칙 해석"} · 목소리: ${server.tts ? "AI 자연 음성 사용 가능" : "기기 내장 한국어 음성"} · 음성 인식: ${SR ? "사용 가능" : "지원 안 됨"}`;
   }
-  $("#btnDoctor").onclick = openDoctor;
-  $("#btnSettings").onclick = () => {
+  $("#btnMenu").onclick = openMenu;
+  function openSettings() {
     $("#rateInput").value = state.rate; $("#rateVal").textContent = state.rate.toFixed(2) + "배";
     $("#demoToggle").checked = state.demo; $("#reduceMotion").checked = state.reduce;
     updateEngineInfo(); $("#settings").hidden = false;
