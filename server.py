@@ -38,6 +38,21 @@ KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 # 공공데이터포털 인증키 (Encoding 키를 넣어도 자동으로 풀어서 씀)
 DATA_KEY = urllib.parse.unquote(os.environ.get("DATA_GO_KR_KEY", "").strip())
 NMC = "https://apis.data.go.kr/B552657"
+
+
+def _ssl_context():
+    """맥에 python.org 파이썬을 깔면 인증서가 비어 있는 경우가 있어, 시스템 인증서를 대신 씀"""
+    import ssl
+    ctx = ssl.create_default_context()
+    if not ctx.get_ca_certs():
+        for path in ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+            if os.path.exists(path):
+                ctx.load_verify_locations(path)
+                break
+    return ctx
+
+
+SSL_CTX = _ssl_context()
 PORT = int(os.environ.get("PORT", "8000"))
 TTS_VOICE = os.environ.get("TTS_VOICE", "coral")
 
@@ -68,7 +83,7 @@ def openai(path, payload, raw=False):
         data=json.dumps(payload).encode(),
         headers={"Authorization": "Bearer " + KEY, "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as r:
         body = r.read()
     return body if raw else json.loads(body)
 
@@ -76,8 +91,14 @@ def openai(path, payload, raw=False):
 def data_go(path, params):
     """공공데이터 API 호출 → item 목록(dict)"""
     qs = urllib.parse.urlencode({"serviceKey": DATA_KEY, **params})
-    with urllib.request.urlopen(f"{NMC}/{path}?{qs}", timeout=15) as r:
-        root = ET.fromstring(r.read())
+    try:
+        with urllib.request.urlopen(f"{NMC}/{path}?{qs}", timeout=15, context=SSL_CTX) as r:
+            root = ET.fromstring(r.read())
+    except urllib.error.HTTPError as e:   # 키 오류도 XML로 옴 → 이유를 읽어서 알려 줌 (키는 남기지 않음)
+        try:
+            root = ET.fromstring(e.read())
+        except ET.ParseError:
+            raise RuntimeError(f"공공데이터 HTTP {e.code}") from None
     code = root.findtext(".//resultCode") or root.findtext(".//returnReasonCode")
     if code not in (None, "00", "0000"):
         raise RuntimeError(f"공공데이터 오류 {code}: {root.findtext('.//resultMsg') or root.findtext('.//returnAuthMsg') or ''}")
