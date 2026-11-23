@@ -1056,6 +1056,38 @@
     go("doctor");
   }
 
+  // ───────────────────────── 119 응급 전화 ─────────────────────────
+  // 전화 버튼은 휴대폰 전화 앱을 119가 입력된 상태로 엽니다 (통화는 어르신이 직접 누름 → 실수로 걸리지 않음).
+  async function openSOS() {
+    stopSpeaking();
+    const s = state.slots, where =
+      state.screen === "indoor" ? "분당서울대병원 1동 1층이에요." :
+      state.screen === "outdoor" ? `${RT().outdoor[state.outIdx] ? RT().outdoor[state.outIdx].place : "병원"} 가는 길이에요.` : "";
+    $("#sosScript").innerHTML = [
+      "① <b>어디인지</b>: 아래 위치를 읽어 주세요." + (where ? "<br>　" + esc(where) : ""),
+      "② <b>무슨 일인지</b>: “넘어졌어요” / “숨이 차요” / “가슴이 아파요” / “어지러워요”",
+      s.mobility && s.mobility !== "도움 필요 없음" ? `③ “${esc(s.mobility)}를 쓰고 있어요”` : ""
+    ].filter(Boolean).join("<br>");
+    $("#sos").hidden = false; vibrate([100, 60, 100]);
+    speak("119에 전화하려면 빨간 버튼을 누르세요. 전화가 연결되면, 어디인지와 무슨 일인지 말씀하세요.", { force: true });
+    const locEl = $("#sosLoc");
+    locEl.textContent = "📍 위치 찾는 중…";
+    const r = await requestLocation();
+    if (r !== "granted" || !nav.pos) { locEl.textContent = "📍 위치를 몰라요. 주변 건물 이름이나 간판을 말씀하세요."; return; }
+    const { lat, lng } = nav.pos;
+    let addr = "";
+    try {
+      const j = await (await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=ko&zoom=18&lat=${lat}&lon=${lng}`)).json();
+      const a = j.address || {};
+      addr = [a.city || a.county || a.state, a.borough || a.city_district, a.suburb || a.quarter || a.neighbourhood, a.road, a.house_number].filter(Boolean).join(" ");
+      if (j.name) addr += ` (${j.name} 근처)`;
+    } catch {}
+    locEl.innerHTML = `📍 <b>${esc(addr || "주소를 못 찾았어요")}</b><br><small>위도 ${lat.toFixed(5)}, 경도 ${lng.toFixed(5)}${nav.acc ? ` · 오차 약 ${Math.round(nav.acc)}m` : ""}</small>`;
+  }
+  $("#btn119").onclick = openSOS;
+  $("#sosClose").onclick = () => { $("#sos").hidden = true; stopSpeaking(); };
+  $("#call119").onclick = () => { stopSpeaking(); };
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);

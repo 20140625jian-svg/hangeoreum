@@ -6,13 +6,14 @@
   <meta name="theme-color" content="#0b5d4b">
   <title>병원한걸음</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">병원<b>한걸음</b></div>
     <div class="top-actions">
-      <button id="btnDoctor" class="chip">🩺 진료 메모</button>
+      <button id="btn119" class="chip chip-sos" aria-label="119 응급 전화">🚨 119</button>
+      <button id="btnDoctor" class="chip" aria-label="진료 메모">🩺 진료</button>
       <button id="btnSound" class="chip" aria-pressed="true">🔊 소리 켬</button>
       <button id="btnSettings" class="chip" aria-label="설정">⚙︎</button>
     </div>
@@ -30,6 +31,20 @@
       <p class="help-small">직원분께 보여 드리세요</p>
       <p id="helpText" class="help-text"></p>
       <button id="helpClose" class="btn btn-xl btn-light">닫기</button>
+    </div>
+  </div>
+
+  <!-- 119 응급 -->
+  <div id="sos" class="overlay sos" hidden role="dialog" aria-modal="true" aria-label="119 응급 전화">
+    <div class="help-inner">
+      <p class="sos-title">🚨 많이 아프거나 다치셨나요?</p>
+      <a id="call119" class="btn btn-xl btn-sos" href="tel:119">📞 119에 전화하기</a>
+      <div class="sos-card">
+        <p class="help-small">전화가 연결되면 이렇게 말씀하세요</p>
+        <p id="sosScript" class="sos-script"></p>
+        <p id="sosLoc" class="sos-loc">📍 위치 찾는 중…</p>
+      </div>
+      <button id="sosClose" class="btn btn-xl btn-light">닫기 (괜찮아요)</button>
     </div>
   </div>
 
@@ -56,7 +71,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="route.js?v=6"></script>
-  <script src="app.js?v=6"></script>
+  <script src="route.js?v=7"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
