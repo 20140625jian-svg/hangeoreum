@@ -142,3 +142,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .main, .dock { width: 100%; max-width: 640px; margin-left: auto; margin-right: auto; }
 .stepbar { max-width: 608px; } @media (min-width: 641px) { .stepbar { margin: 0 auto; width: 608px; } }
+
+/* 지도 */
+.map { width: 100%; height: 300px; border-radius: var(--radius); border: 2px solid var(--line); overflow: hidden; background: var(--card); z-index: 0; }
+.map.mini { height: 200px; }
+.search { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.search input { min-height: var(--tap); font-size: 22px; padding: 0 16px; border-radius: 16px; border: 2px solid var(--line); background: var(--card); color: var(--ink); width: 100%; }
+.results { display: flex; flex-direction: column; gap: 8px; }
+.results:empty { display: none; }
+.btn.result { justify-content: flex-start; font-weight: 500; font-size: 20px; line-height: 1.35; }
+.btn.result small { font-size: 16px; }
+.pin { background: none; border: none; }
+.pin span { font-size: 40px; display: block; text-align: center; filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+.me-dot span { display: block; width: 26px; height: 26px; border-radius: 50%; background: #1a73e8; border: 4px solid #fff; box-shadow: 0 0 0 8px rgba(26,115,232,.25); }
+.leaflet-container { font: inherit; font-size: 14px; }
+.leaflet-control-zoom a { width: 44px !important; height: 44px !important; line-height: 44px !important; font-size: 24px !important; }

@@ -14,11 +14,11 @@
   const store = {
     get(k, d) { try { const v = localStorage.getItem("hg:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem("hg:" + k, JSON.stringify(v)); } catch {} },
-    clear() { try { Object.keys(localStorage).filter(k => k.startsWith("hg:")).forEach(k => localStorage.removeItem(k)); } catch {} }
+    clear() { try { Object.keys(localStorage).filter(k => k.startsWith("hg:") && k !== "hg:permDone").forEach(k => localStorage.removeItem(k)); } catch {} }
   };
 
   const state = {
-    screen: store.get("screen", "talk"),   // talk | confirm | apply | outdoor | indoor | done
+    screen: store.get("screen", store.get("permDone", false) ? "talk" : "perm"),   // talk | confirm | apply | outdoor | indoor | done
     slots: store.get("slots", { hospital: null, firstVisit: null, mobility: null, reception: null }),
     heard: "",
     outIdx: store.get("outIdx", 0),
@@ -30,7 +30,24 @@
     reduce: store.get("reduce", matchMedia("(prefers-reduced-motion: reduce)").matches),
     lastSaid: ""
   };
+  state.dest = store.get("dest", null);           // null = 분당서울대 확인 경로, {name,lat,lng} = 지도에서 고른 곳
+  const isPreset = () => !state.dest;
+  function RT() {
+    if (isPreset()) return R;
+    const d = state.dest;
+    return {
+      outdoor: [{
+        id: "c1", type: "walk", place: d.name,
+        screen: `${d.name}(으)로 가세요.`,
+        voice: `${d.name}(으)로 안내를 시작할게요. 화살표가 가리키는 쪽으로 천천히 걸어가세요. 큰길과 횡단보도를 이용하세요.`,
+        sign: "가까이 가면 건물 간판의 이름을 꼭 확인하세요. 지도의 직선 방향이라 실제 길은 조금 다를 수 있어요.",
+        lat: d.lat, lng: d.lng, arriveRadius: 35, verified: true
+      }],
+      indoor: []
+    };
+  }
   const save = () => {
+    store.set("dest", state.dest);
     ["screen", "slots", "outIdx", "inIdx", "sound", "rate", "voiceURI", "demo", "reduce"].forEach(k => store.set(k, state[k]));
   };
 
@@ -121,7 +138,8 @@
     };
     rec.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        speak("마이크를 쓸 수 없어요. 화면의 큰 버튼을 눌러서 골라 주세요.");
+        speak("마이크가 꺼져 있어요. 마이크 켜는 방법을 보여 드릴게요.");
+        setTimeout(() => { if (confirm("마이크 권한이 꺼져 있어요. 켜는 방법을 볼까요?")) go("perm"); }, 300);
       }
     };
     rec.onend = () => {
@@ -194,12 +212,13 @@
   function openHelp() {
     const s = state.slots;
     let where = "";
-    if (state.screen === "outdoor") where = `지금 “${R.outdoor[state.outIdx].place}”(으)로 가는 중입니다.`;
+    if (state.screen === "outdoor") where = `지금 “${RT().outdoor[state.outIdx].place}”(으)로 가는 중입니다.`;
     else if (state.screen === "indoor") where = "1동 1층 ‘처음오신 창구’를 찾고 있습니다.";
     const lines = [
-      `${s.hospital || "분당서울대학교병원"}${s.firstVisit === false ? "에 진료 받으러 왔습니다." : " 첫 방문입니다."}`,
+      `${(!isPreset() && state.dest.name) || s.hospital || "분당서울대학교병원"}${s.firstVisit === false ? "에 진료 받으러 왔습니다." : " 첫 방문입니다."}`,
       s.mobility && s.mobility !== "도움 필요 없음" ? `${s.mobility}를 사용 중입니다.` : "",
       where,
+      !isPreset() && state.screen === "outdoor" ? "이곳에 가는 길을 알려 주세요." :
       state.screen === "indoor" || state.screen === "outdoor" ? "1동 1층 처음오신 창구 가는 길을 알려 주세요." : "도와주세요.",
     ].filter(Boolean);
     $("#helpText").innerHTML = lines.join("<br>");
@@ -297,10 +316,10 @@
       if (c.phone) location.href = "tel:" + c.phone.replace(/[^0-9]/g, "");
       else window.open(c.url, "_blank", "noopener");
     });
-    dock.replaceChildren(openBtn, btn("🧭 길 안내 시작 (미금역에서)", "btn-xl btn-light", () => { state.outIdx = store.get("outIdx", 0); go("outdoor"); }), row(replayBtn(), helpBtn()));
+    dock.replaceChildren(openBtn, btn("🗺 어디로 갈지 지도에서 고르기", "btn-xl btn-light", () => go("pick")), row(replayBtn(), helpBtn()));
     speak(needs
-      ? "성남시에는 병원까지 같이 가 주는 병원동행 서비스가 있어요. 위쪽 초록 버튼을 누르면 신청하는 곳이 열립니다. 원하는 시간에 안 된다고 하면, 다른 가능한 시간을 물어보세요. 혼자 가실 때는 아래 길 안내 시작 버튼을 누르세요."
-      : "혼자 가셔도 괜찮아요. 길 안내 시작 버튼을 누르면 미금역부터 한 걸음씩 알려 드릴게요.");
+      ? "성남시에는 병원까지 같이 가 주는 병원동행 서비스가 있어요. 위쪽 초록 버튼을 누르면 신청하는 곳이 열립니다. 원하는 시간에 안 된다고 하면, 다른 가능한 시간을 물어보세요. 혼자 가실 때는 아래 버튼을 눌러, 어디로 갈지 지도에서 골라 주세요."
+      : "혼자 가셔도 괜찮아요. 아래 버튼을 눌러 어디로 갈지 고르시면, 한 걸음씩 알려 드릴게요.");
   }
 
   // ───────────────────────── 화면 2: 야외 GPS 길안내 ─────────────────────────
@@ -383,6 +402,7 @@
       (err) => {
         const msg = err.code === 1 ? "위치 권한이 꺼져 있어요. 표지판 안내와 ‘도착했어요’ 버튼으로 가실 수 있어요." : "위치를 찾는 중이에요. 하늘이 보이는 곳에서 잠시 기다려 주세요.";
         setGpsStatus(msg, true);
+        if (err.code === 1 && !$("#fixPerm")) { const f = btn("📍 위치 권한 켜는 방법 보기", "btn-light", () => go("perm")); f.id = "fixPerm"; $("#gpsStatus").after(f); }
         if (err.code === 1 && !nav.permSaid) { nav.permSaid = true; speak("위치 권한이 꺼져 있어요. 표지판을 보고 가시다가, 도착하면 도착했어요 버튼을 눌러 주세요."); }
       },
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
@@ -390,13 +410,13 @@
   }
   // 시연 모드: 실제 GPS 대신 목적지 쪽으로 조금씩 걸어가는 것처럼 위치를 움직임
   function startDemo() {
-    const step = R.outdoor[state.outIdx];
-    const prev = state.outIdx > 0 ? R.outdoor[state.outIdx - 1] : { lat: step.lat - 0.0012, lng: step.lng - 0.0009 };
+    const step = RT().outdoor[state.outIdx];
+    const prev = state.outIdx > 0 ? RT().outdoor[state.outIdx - 1] : { lat: step.lat - 0.0012, lng: step.lng - 0.0009 };
     nav.pos = nav.pos || { lat: prev.lat, lng: prev.lng }; nav.acc = 5;
     if (nav.heading == null) { nav.heading = bearing(nav.pos, step) + 50; nav.demoHeading = true; }
     clearInterval(nav.demoTimer);
     nav.demoTimer = setInterval(() => {
-      const t = R.outdoor[state.outIdx]; if (!t) return;
+      const t = RT().outdoor[state.outIdx]; if (!t) return;
       const d = distanceM(nav.pos, t);
       const speed = t.type === "bus" ? 120 : 9; // m / tick
       const f = Math.min(1, speed / Math.max(d, 1));
@@ -414,12 +434,12 @@
   function setGpsStatus(t, bad) { const el = $("#gpsStatus"); if (el) { el.textContent = t; el.classList.toggle("bad", !!bad); } }
 
   function renderOutdoor() {
-    const i = state.outIdx, step = R.outdoor[i];
-    if (!step) return go("indoor");
+    const i = state.outIdx, step = RT().outdoor[i];
+    if (!step) return go(RT().indoor.length ? "indoor" : "done");
     nav.arrived = false; nav.nearSaid = false; nav.lastDirWord = ""; nav.lastDirSpokeAt = 0;
-    setStep(`2. 가는 길 ${i + 1}/${R.outdoor.length}`, step.type === "bus" ? "버스 타기" : "걷기");
+    setStep(`2. 가는 길 ${i + 1}/${RT().outdoor.length}`, step.type === "bus" ? "버스 타기" : "걷기");
     main.innerHTML = `
-      <div class="progress">${R.outdoor.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
+      <div class="progress">${RT().outdoor.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
       <section class="card">
         <p class="muted">지금 할 일 ${step.verified ? "" : '<span class="badge">현장 확인 전</span>'}</p>
         <p class="big">${step.screen}</p>
@@ -435,13 +455,16 @@
         <div class="gps-status" id="gpsStatus">GPS 연결 중</div>
         <button id="sensorBtn" class="btn btn-light" hidden>🧭 방향 센서 켜기</button>
       </section>
-      <section class="sign" id="signBox">🪧 ${step.sign}</section>`;
+      <section class="sign" id="signBox">🪧 ${step.sign}</section>
+      <div id="miniMap" class="map mini" aria-label="내 위치와 목적지 지도"></div>`;
+    makeMiniMap(step);
     $("#arrow").parentElement.classList.toggle("reduce", state.reduce);
     const arrive = btn(step.type === "bus" ? "🚌 버스에서 내렸어요" : "📍 여기에 도착했어요 · 다음", "btn-xl btn-primary", () => nextOutdoor());
     dock.replaceChildren(arrive, row(replayBtn(), helpBtn()));
     main.append(row(
-      btn("⬅ 이전 지점", "btn-light", () => { if (state.outIdx > 0) { state.outIdx--; save(); renderOutdoor(); } else go("apply"); }),
-      btn("🏥 1동에 들어왔어요", "btn-light", () => { state.inIdx = 0; go("indoor"); })
+      btn("⬅ 이전 지점", "btn-light", () => { if (state.outIdx > 0) { state.outIdx--; save(); renderOutdoor(); } else go("pick"); }),
+      isPreset() ? btn("🏥 1동에 들어왔어요", "btn-light", () => { state.inIdx = 0; go("indoor"); })
+                 : btn("🗺 목적지 바꾸기", "btn-light", () => go("pick"))
     ));
 
     // 센서 권한: iOS 는 버튼 눌러야 함
@@ -458,9 +481,10 @@
 
   function updateNavUI() {
     if (state.screen !== "outdoor") return;
-    const step = R.outdoor[state.outIdx]; if (!step) return;
+    const step = RT().outdoor[state.outIdx]; if (!step) return;
     const arrow = $("#arrow"); if (!arrow) return;
     if (!nav.pos) { $("#dirWord").textContent = "위치를 찾는 중…"; return; }
+    updateMiniMap(step);
     const d = distanceM(nav.pos, step), b = bearing(nav.pos, step);
     const compassOk = nav.heading != null && Date.now() - nav.headingAt < 4000;
     const rel = compassOk ? norm180(b - nav.heading) : norm180(b);
@@ -503,17 +527,17 @@
   }
   function nextOutdoor() {
     state.outIdx++; save(); vibrate(60);
-    if (state.outIdx >= R.outdoor.length) { state.inIdx = 0; go("indoor"); }
+    if (state.outIdx >= RT().outdoor.length) { state.inIdx = 0; go(RT().indoor.length ? "indoor" : "done"); }
     else renderOutdoor();
   }
 
   // ───────────────────────── 화면 3: 실내 한 걸음 안내 ─────────────────────────
   function renderIndoor() {
-    const i = state.inIdx, step = R.indoor[i];
+    const i = state.inIdx, step = RT().indoor[i];
     if (!step) return go("done");
-    setStep(`3. 병원 안 ${i + 1}/${R.indoor.length}`, `창구까지 ${R.indoor.length - i}단계`);
+    setStep(`3. 병원 안 ${i + 1}/${RT().indoor.length}`, `창구까지 ${RT().indoor.length - i}단계`);
     main.innerHTML = `
-      <div class="progress">${R.indoor.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
+      <div class="progress">${RT().indoor.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
       <section class="card">
         <p class="muted">지금 할 일 한 가지 ${step.verified ? "" : '<span class="badge">현장 확인 전</span>'}</p>
         <p class="big">${step.screen}</p>
@@ -521,8 +545,8 @@
       <section class="sign">🪧 ${step.sign}</section>
       <section class="card"><p class="muted">소리를 꺼도 화면 글씨와 버튼만으로 끝까지 갈 수 있어요. 마지막으로 확인한 곳을 기억해 둡니다.</p></section>`;
     dock.replaceChildren(
-      btn(i === R.indoor.length - 1 ? "✅ 창구에 도착했어요" : "👍 했어요 · 다음", "btn-xl btn-primary", () => { state.inIdx++; save(); vibrate(60); renderIndoor(); }),
-      row(replayBtn(), btn("⬅ 이전 단계", "btn-light", () => { if (state.inIdx > 0) { state.inIdx--; save(); renderIndoor(); } else { state.outIdx = R.outdoor.length - 1; go("outdoor"); } })),
+      btn(i === RT().indoor.length - 1 ? "✅ 창구에 도착했어요" : "👍 했어요 · 다음", "btn-xl btn-primary", () => { state.inIdx++; save(); vibrate(60); renderIndoor(); }),
+      row(replayBtn(), btn("⬅ 이전 단계", "btn-light", () => { if (state.inIdx > 0) { state.inIdx--; save(); renderIndoor(); } else { state.outIdx = RT().outdoor.length - 1; go("outdoor"); } })),
       btn("🙋 직원에게 보여줄 도움 문장 크게 켜기", "btn-xl btn-help", openHelp)
     );
     speak(step.voice);
@@ -530,21 +554,263 @@
 
   function renderDone() {
     setStep("도착!", "수고하셨어요");
+    if (!isPreset()) {
+      main.innerHTML = `<section class="card"><p class="big">${esc(state.dest.name)}에<br>잘 도착하셨어요. 👏</p><p style="margin-top:12px">건물 간판의 이름이 맞는지 한 번 더 확인하세요.</p></section>`;
+      dock.replaceChildren(btn("🗺 다른 곳 고르기", "btn-xl btn-light", () => go("pick")), row(replayBtn(), helpBtn()));
+      return speak(`${state.dest.name}에 잘 도착하셨어요. 수고 많으셨어요.`);
+    }
     main.innerHTML = `<section class="card"><p class="big">처음오신 창구에<br>잘 도착하셨어요. 👏</p>
       <p style="margin-top:12px">번호가 불리면 창구에서 <b>“오늘 예약하고 처음 왔어요”</b> 라고 말씀하세요.</p></section>`;
     dock.replaceChildren(btn("🏠 처음 화면으로", "btn-xl btn-light", () => resetAll()), row(replayBtn(), helpBtn()));
     speak("처음오신 창구에 잘 도착하셨어요. 정말 수고 많으셨어요. 번호가 불리면 창구에서, 오늘 예약하고 처음 왔다고 말씀하세요.");
   }
 
+  // ───────────────────────── 권한 켜기 (위치 · 마이크 · 방향) ─────────────────────────
+  const UA = navigator.userAgent;
+  const isAndroid = /Android/i.test(UA);
+  const isIOS = /iPhone|iPad|iPod/i.test(UA) || (!isAndroid && navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const inApp = /KAKAOTALK|NAVER\(|Instagram|FBAN|FBAV|Line\/|DaumApps|everytimeApp|SamsungBrowser\/.*CrossApp/i.test(UA);
+  const perm = { loc: "unknown", mic: "unknown", compass: "unknown" };
+
+  async function queryPerm(name) {
+    try { return (await navigator.permissions.query({ name })).state; } catch { return "unknown"; }
+  }
+  function requestLocation() {
+    return new Promise(res => {
+      if (!("geolocation" in navigator)) return res("unsupported");
+      if (!isSecureContext) return res("insecure");
+      navigator.geolocation.getCurrentPosition(
+        p => { nav.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; nav.acc = p.coords.accuracy; res("granted"); },
+        e => res(e.code === 1 ? "denied" : "error"),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+    });
+  }
+  async function requestMic() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return SR ? "unknown" : "unsupported";
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ audio: true });
+      st.getTracks().forEach(t => t.stop());
+      return "granted";
+    } catch (e) { return e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? "denied" : "error"; }
+  }
+  async function requestCompass() {
+    if (typeof DeviceOrientationEvent === "undefined") return "unsupported";
+    if (typeof DeviceOrientationEvent.requestPermission !== "function") return "granted";
+    try { const r = await DeviceOrientationEvent.requestPermission(); nav.sensorAsked = true; return r === "granted" ? "granted" : "denied"; }
+    catch { return "denied"; }
+  }
+  const PERM_LABEL = { granted: "✅ 켜짐", denied: "❌ 꺼짐", prompt: "⏳ 아직", unknown: "⏳ 아직", error: "⚠️ 다시 시도", unsupported: "— 지원 안 함", insecure: "⚠️ https 필요" };
+  function fixGuide(kind) {
+    const what = kind === "loc" ? "위치" : "마이크";
+    if (inApp) return `카카오톡·네이버 같은 앱 안에서는 ${what}가 안 될 수 있어요. 오른쪽 위 ⋮ 또는 공유 버튼에서 <b>‘다른 브라우저로 열기’</b>를 눌러 ${isIOS ? "Safari" : "Chrome"}로 열어 주세요.`;
+    if (isIOS) return kind === "loc"
+      ? `① 아이폰 <b>설정 → 개인정보 보호 및 보안 → 위치 서비스</b>를 켜고, 아래쪽 <b>Safari 웹 사이트 → ‘앱을 사용하는 동안’</b>으로 바꾸세요.<br>② Safari 주소창 왼쪽 <b>‘가가’(aA) 버튼 → 웹 사이트 설정 → 위치 ‘허용’</b>.<br>③ 이 화면으로 돌아와 다시 눌러 주세요.`
+      : `① Safari 주소창 왼쪽 <b>‘가가’(aA) 버튼 → 웹 사이트 설정 → 마이크 ‘허용’</b>.<br>② 그래도 안 되면 <b>설정 → Safari → 마이크 → 허용</b>, 그리고 <b>설정 → Siri → ‘Siri에게 말하기’</b>(받아쓰기)를 켜 주세요.`;
+    if (isAndroid) return kind === "loc"
+      ? `① 화면 위에서 아래로 쓸어내려 <b>‘위치’</b>를 켜세요.<br>② Chrome 주소창 왼쪽 <b>설정(⚙ 또는 자물쇠) 버튼 → 권한 → 위치 ‘허용’</b>.<br>③ 이 화면으로 돌아와 다시 눌러 주세요.`
+      : `Chrome 주소창 왼쪽 <b>설정(⚙ 또는 자물쇠) 버튼 → 권한 → 마이크 ‘허용’</b>을 눌러 주세요.`;
+    return `브라우저 주소창 왼쪽 자물쇠 버튼을 눌러 ${what}를 ‘허용’으로 바꿔 주세요.`;
+  }
+  async function renderPerm() {
+    setStep("시작 준비", "권한 켜기");
+    perm.loc = perm.loc === "unknown" ? await queryPerm("geolocation") : perm.loc;
+    perm.mic = perm.mic === "unknown" ? await queryPerm("microphone") : perm.mic;
+    const needCompass = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
+    const item = (k, icon, title, desc, show = true) => !show ? "" : `
+      <div class="slot ${perm[k] === "granted" ? "" : "missing"}">
+        <div><div class="v">${icon} ${title}</div><div class="k">${desc}</div></div>
+        <button class="edit" data-perm="${k}">${perm[k] === "granted" ? "✅ 켜짐" : "켜기"}</button>
+      </div>
+      ${perm[k] === "denied" || perm[k] === "error" || perm[k] === "insecure" ? `<div class="sign" style="font-size:18px">${perm[k] === "insecure" ? "https 주소로 열어야 해요." : fixGuide(k)}</div>` : ""}`;
+    main.innerHTML = `
+      <section class="card"><p class="big">길 안내를 하려면<br>두 가지를 켜 주세요.</p>
+        <p class="muted" style="margin-top:8px">버튼을 누르면 휴대폰이 물어봐요. <b>‘허용’</b>을 눌러 주세요.</p></section>
+      ${inApp ? `<div class="sign" style="font-size:18px">⚠️ ${fixGuide("loc")}</div>` : ""}
+      <section class="slots">
+        ${item("loc", "📍", "위치(GPS)", "어디로 걸어가야 할지 알려 드려요")}
+        ${item("mic", "🎙", "마이크", "말로 병원 이름을 알려 주실 수 있어요")}
+        ${item("compass", "🧭", "방향 센서", "휴대폰이 향한 쪽으로 화살표를 돌려요", needCompass)}
+      </section>
+      ${!SR ? `<p class="muted">이 브라우저는 말 알아듣기를 지원하지 않아요. 버튼으로도 모두 쓸 수 있어요.</p>` : ""}
+      <p class="muted">이름·음성 녹음은 저장하지 않아요. 위치는 길 안내에만 쓰고 어디에도 보내지 않아요.</p>`;
+    main.querySelectorAll("[data-perm]").forEach(b => b.onclick = async () => {
+      const k = b.dataset.perm; b.textContent = "확인 중…";
+      perm[k] = k === "loc" ? await requestLocation() : k === "mic" ? await requestMic() : await requestCompass();
+      if (k === "compass" && perm[k] === "granted") startCompass();
+      speak(perm[k] === "granted" ? ({ loc: "위치가 켜졌어요.", mic: "마이크가 켜졌어요.", compass: "방향 센서가 켜졌어요." })[k]
+        : "아직 꺼져 있어요. 화면의 방법대로 켜 주세요.");
+      renderPerm();
+    });
+    const allOn = perm.loc === "granted" && (perm.mic === "granted" || !SR);
+    const all = btn("✨ 한 번에 모두 켜기", "btn-xl btn-talk", async () => {
+      all.textContent = "확인 중…";
+      perm.loc = await requestLocation();
+      perm.mic = await requestMic();
+      if (needCompass) { perm.compass = await requestCompass(); if (perm.compass === "granted") startCompass(); }
+      speak(perm.loc === "granted" && perm.mic === "granted" ? "모두 켜졌어요. 다음 버튼을 눌러 주세요." : "꺼진 것이 있어요. 화면의 방법대로 켜 주세요.");
+      renderPerm();
+    });
+    const next = btn(allOn ? "다음 ▶" : "나중에 할게요 ▶", allOn ? "btn-xl btn-primary" : "btn-light", () => { store.set("permDone", true); go(state.slots.hospital ? "pick" : "talk"); });
+    dock.replaceChildren(...(allOn ? [next] : [all, row(replayBtn(), next)]));
+    if (!renderPerm.spoken) { renderPerm.spoken = true; speak("길 안내를 하려면 위치와 마이크를 켜야 해요. 노란 버튼을 누르고, 휴대폰이 물어보면 허용을 눌러 주세요."); }
+  }
+
+  // ───────────────────────── 지도에서 목적지 고르기 ─────────────────────────
+  const maps = { pick: null, mini: null, miniMe: null, miniLine: null, miniAt: 0 };
+  const MIGEUM = [37.35015, 127.10905];
+  const hasLeaflet = () => typeof window.L !== "undefined";
+  function tiles(m) {
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+  }
+  const bigIcon = (emoji, cls = "") => hasLeaflet() ? L.divIcon({ className: "pin " + cls, html: `<span>${emoji}</span>`, iconSize: [48, 48], iconAnchor: [24, 44] }) : null;
+  const meIcon = () => L.divIcon({ className: "me-dot", html: "<span></span>", iconSize: [26, 26], iconAnchor: [13, 13] });
+
+  async function geocode(q) {
+    const near = nav.pos || { lat: MIGEUM[0], lng: MIGEUM[1] };
+    const vb = [near.lng - 0.3, near.lat + 0.25, near.lng + 0.3, near.lat - 0.25].join(",");
+    const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kr&accept-language=ko&limit=6&viewbox=${vb}&q=${encodeURIComponent(q)}`;
+    const r = await fetch(u, { headers: { "Accept": "application/json" } });
+    if (!r.ok) throw new Error("search");
+    const list = await r.json();
+    return list.map(x => ({ name: x.name || x.display_name.split(",")[0], addr: x.display_name.split(",").slice(1, 4).join(",").trim(), lat: +x.lat, lng: +x.lon }))
+      .sort((a, b) => distanceM(near, a) - distanceM(near, b));
+  }
+  async function reverse(lat, lng) {
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=ko&zoom=18&lat=${lat}&lon=${lng}`);
+      const j = await r.json();
+      return j.name || (j.address && (j.address.amenity || j.address.building || j.address.road)) || "고른 곳";
+    } catch { return "고른 곳"; }
+  }
+  function cleanQuery(t) {
+    return t.replace(/(에|으로|로)?\s*(가고\s*싶어요|가고\s*싶어|갈래요|가요|가야\s*돼요|가야\s*해요|가려고요|가려고\s*해요|가 주세요|찾아\s*줘|찾아\s*주세요)[.!?]?$/, "").replace(/[.!?]$/, "").trim();
+  }
+
+  function renderPick() {
+    setStep("2. 어디로 갈까요?", "지도에서 고르기");
+    let picked = isPreset() ? null : { ...state.dest };
+    main.innerHTML = `
+      <section class="card">
+        <p class="big" style="font-size:26px">지도를 눌러 고르거나,<br>이름으로 찾으세요.</p>
+      </section>
+      <form id="searchForm" class="search" role="search">
+        <input id="q" type="search" enterkeyhint="search" placeholder="예) 분당차병원, 정자역" autocomplete="off">
+        <button class="btn btn-primary" type="submit">찾기</button>
+      </form>
+      <div id="results" class="results"></div>
+      <div id="pickMap" class="map" aria-label="목적지를 고르는 지도"></div>
+      <section class="card" id="pickInfo"><p class="muted">아직 고르지 않았어요.</p></section>
+      <button class="btn btn-light" id="presetBtn">🏥 분당서울대병원 (미금역에서 출발 · 확인된 경로)</button>`;
+
+    const startBtn = btn("🧭 여기로 길 안내 시작", "btn-xl btn-primary", () => {
+      if (!picked) return speak("먼저 갈 곳을 골라 주세요.");
+      state.dest = picked; state.outIdx = 0; nav.pos = state.demo ? null : nav.pos; save(); go("outdoor");
+    });
+    const voiceBtn = btn("🎙 말로 찾기", "btn-talk", function () {
+      listen(t => { const q = cleanQuery(t); $("#q").value = q; doSearch(q); }, this);
+    });
+    dock.replaceChildren(startBtn, row(voiceBtn, replayBtn()));
+
+    $("#presetBtn").onclick = () => { state.dest = null; state.outIdx = 0; save(); go("outdoor"); };
+
+    function showPicked() {
+      const box = $("#pickInfo");
+      if (!picked) return;
+      const d = nav.pos ? distanceM(nav.pos, picked) : null;
+      const far = d != null && d > 1500;
+      box.innerHTML = `<p class="muted">고른 곳</p><p class="big" style="font-size:26px">📍 ${esc(picked.name)}</p>
+        ${d != null ? `<p style="margin:6px 0 0">지금 여기서 <b>${distText(d)}</b>${far ? " — 걸어가기엔 멀어요. 버스나 택시를 타고 가까이 가신 뒤 안내를 받으세요." : ""}</p>` : ""}`;
+      speak(`${picked.name}을 골랐어요.${d != null ? ` 여기서 ${distSpeech(d).replace(" 남았어요", "")} 거리예요.` : ""} 맞으면 길 안내 시작 버튼을 눌러 주세요.`.replace("바로 앞이에요 거리예요", "바로 앞이에요"));
+    }
+    function choose(p) {
+      picked = p;
+      if (maps.pick) {
+        if (maps.pickMarker) maps.pickMarker.setLatLng([p.lat, p.lng]);
+        else maps.pickMarker = L.marker([p.lat, p.lng], { icon: bigIcon("📍", "dest") }).addTo(maps.pick);
+        maps.pick.setView([p.lat, p.lng], Math.max(maps.pick.getZoom(), 16));
+      }
+      showPicked();
+    }
+    async function doSearch(q) {
+      const res = $("#results");
+      if (!q) return;
+      res.innerHTML = `<p class="muted">찾는 중…</p>`;
+      try {
+        const list = await geocode(q);
+        if (!list.length) { res.innerHTML = `<p class="muted">‘${esc(q)}’을(를) 못 찾았어요. 지도를 직접 눌러 골라 주세요.</p>`; return speak("찾지 못했어요. 지도를 직접 눌러 골라 주세요."); }
+        res.innerHTML = "";
+        list.slice(0, 4).forEach(p => {
+          const b = btn(`<span style="text-align:left;flex:1"><b>${esc(p.name)}</b><br><small class="muted">${esc(p.addr)}${nav.pos ? " · " + distText(distanceM(nav.pos, p)) : ""}</small></span>`, "btn-light result", () => { res.innerHTML = ""; choose(p); });
+          res.append(b);
+        });
+        speak(`${list.length > 1 ? "몇 곳을 찾았어요. 가실 곳을 눌러 주세요." : "찾았어요. 눌러 주세요."}`);
+      } catch { res.innerHTML = `<p class="muted">인터넷 연결을 확인해 주세요.</p>`; }
+    }
+    $("#searchForm").onsubmit = (e) => { e.preventDefault(); $("#q").blur(); doSearch($("#q").value.trim()); };
+
+    if (!hasLeaflet()) { $("#pickMap").innerHTML = `<p class="muted" style="padding:16px">지도를 불러오지 못했어요. 이름으로 찾아 주세요.</p>`; }
+    else {
+      const center = picked ? [picked.lat, picked.lng] : nav.pos ? [nav.pos.lat, nav.pos.lng] : MIGEUM;
+      const m = maps.pick = L.map("pickMap", { zoomControl: true, attributionControl: true }).setView(center, 16);
+      maps.pickMarker = null; tiles(m);
+      if (nav.pos) maps.pickMe = L.marker([nav.pos.lat, nav.pos.lng], { icon: meIcon(), interactive: false }).addTo(m);
+      m.on("click", async (e) => {
+        const p = { name: "고른 곳", lat: e.latlng.lat, lng: e.latlng.lng };
+        choose(p);
+        p.name = await reverse(p.lat, p.lng);
+        if (picked === p) showPicked();
+      });
+      if (picked) choose(picked);
+      // 내 위치 찾기
+      if (!nav.pos && !state.demo) requestLocation().then(r => {
+        perm.loc = r;
+        if (r === "granted" && maps.pick) {
+          maps.pickMe = L.marker([nav.pos.lat, nav.pos.lng], { icon: meIcon(), interactive: false }).addTo(maps.pick);
+          if (!picked) maps.pick.setView([nav.pos.lat, nav.pos.lng], 16);
+        }
+      });
+    }
+
+    // 말한 병원 이름이 있으면 바로 찾아 줌
+    const h = state.slots.hospital;
+    if (!picked && h && !/분당서울대/.test(h)) { $("#q").value = h; doSearch(h); }
+    else if (!picked) speak("어디로 가실지 골라 주세요. 지도를 누르거나, 이름으로 찾으시면 돼요. 분당서울대병원은 아래 버튼을 누르세요.");
+  }
+
+  // 길 안내 화면 아래 작은 지도: 나와 목적지, 그리고 직선
+  function makeMiniMap(step) {
+    if (!hasLeaflet()) { $("#miniMap").remove(); return; }
+    const m = maps.mini = L.map("miniMap", { zoomControl: false, attributionControl: true, dragging: true }).setView([step.lat, step.lng], 16);
+    tiles(m);
+    L.marker([step.lat, step.lng], { icon: bigIcon(step.type === "bus" ? "🚏" : "📍", "dest") }).addTo(m);
+    maps.miniMe = null; maps.miniLine = null; maps.miniAt = 0; maps.miniFitAt = 0;
+    setTimeout(() => m.invalidateSize(), 250);
+  }
+  function updateMiniMap(step) {
+    if (!maps.mini || !nav.pos) return;
+    const now = Date.now(); if (now - maps.miniAt < 1500) return; maps.miniAt = now;
+    const me = [nav.pos.lat, nav.pos.lng], to = [step.lat, step.lng];
+    if (!maps.miniMe) maps.miniMe = L.marker(me, { icon: meIcon(), interactive: false }).addTo(maps.mini); else maps.miniMe.setLatLng(me);
+    if (!maps.miniLine) maps.miniLine = L.polyline([me, to], { color: "#0b5d4b", weight: 5, dashArray: "8 8" }).addTo(maps.mini); else maps.miniLine.setLatLngs([me, to]);
+    // 지도는 가끔만 다시 맞춤 (타일이 다 그려질 시간을 줌)
+    const b = L.latLngBounds([me, to]);
+    if (now - maps.miniFitAt > 8000 || !maps.mini.getBounds().contains(b)) {
+      maps.miniFitAt = now;
+      maps.mini.fitBounds(b.pad(0.3), { maxZoom: 18, animate: false });
+    }
+  }
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
-    ({ talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
+    if (maps.pick) { maps.pick.remove(); maps.pick = null; }
+    if (maps.mini) { maps.mini.remove(); maps.mini = null; }
+    ({ perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderTalk)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
     stopSpeaking(); stopNav(); store.clear();
-    Object.assign(state, { screen: "talk", slots: { hospital: null, firstVisit: null, mobility: null, reception: null }, heard: "", outIdx: 0, inIdx: 0 });
+    Object.assign(state, { screen: "talk", slots: { hospital: null, firstVisit: null, mobility: null, reception: null }, heard: "", outIdx: 0, inIdx: 0, dest: null });
     nav.pos = null; nav.heading = null; save(); render();
   }
 
@@ -570,6 +836,7 @@
   $("#demoToggle").onchange = (e) => { state.demo = e.target.checked; nav.pos = null; nav.heading = null; save(); };
   $("#reduceMotion").onchange = (e) => { state.reduce = e.target.checked; save(); document.body.classList.toggle("reduce", state.reduce); };
   $("#testVoice").onclick = () => speak("안녕하세요. 병원 한걸음이에요. 천천히, 한 걸음씩 같이 가요.", { force: true });
+  $("#permAgain").onclick = () => { $("#settings").hidden = true; perm.loc = perm.mic = perm.compass = "unknown"; go("perm"); };
   $("#resetAll").onclick = () => { $("#settings").hidden = true; resetAll(); };
 
   // 브라우저 자동재생 정책: 첫 터치 후에야 소리가 나므로, 첫 터치 때 현재 안내를 다시 읽음

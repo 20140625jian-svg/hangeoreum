@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b5d4b">
   <title>병원한걸음</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -46,12 +47,14 @@
       <p id="engineInfo" class="muted"></p>
       <div class="row gap">
         <button id="testVoice" class="btn btn-light">목소리 들어보기</button>
+        <button id="permAgain" class="btn btn-light">위치·마이크 켜기</button>
         <button id="resetAll" class="btn btn-light">처음부터 다시</button>
       </div>
       <button id="settingsClose" class="btn btn-xl btn-primary">닫기</button>
     </div>
   </div>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="route.js"></script>
   <script src="app.js"></script>
 </body>
