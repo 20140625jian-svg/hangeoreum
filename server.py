@@ -105,6 +105,36 @@ def data_go(path, params):
     return [{c.tag: (c.text or "").strip() for c in it} for it in root.iter("item")]
 
 
+GBIS = "https://apis.data.go.kr/6410000"
+
+
+def bus_arrival(station_id, route_id=None):
+    """경기도 버스도착정보 v2 → 노선별 도착 예정 (분, 몇 정거장 전, 저상버스, 혼잡)"""
+    qs = urllib.parse.urlencode({"serviceKey": DATA_KEY, "stationId": station_id, "format": "json"})
+    with urllib.request.urlopen(f"{GBIS}/busarrivalservice/v2/getBusArrivalListv2?{qs}", timeout=15, context=SSL_CTX) as r:
+        j = json.loads(r.read())
+    head = j.get("response", {}).get("msgHeader", {})
+    if str(head.get("resultCode")) not in ("0", "4"):   # 4 = 도착 정보 없음
+        raise RuntimeError(f"버스정보 오류 {head.get('resultCode')}: {head.get('resultMessage', '')}")
+    rows = (j["response"].get("msgBody") or {}).get("busArrivalList") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    out = []
+    for b in rows:
+        if route_id and str(b.get("routeId")) != str(route_id):
+            continue
+        buses = []
+        for n in ("1", "2"):
+            t = b.get("predictTime" + n)
+            if t not in ("", None):
+                buses.append({"min": int(t), "stops": b.get("locationNo" + n) or None,
+                              "low": b.get("lowPlate" + n) == 1, "crowded": b.get("crowded" + n) or 0,
+                              "stationNow": b.get("stationNm" + n) or ""})
+        out.append({"routeId": b.get("routeId"), "routeName": str(b.get("routeName")),
+                    "dest": b.get("routeDestName", ""), "flag": b.get("flag", ""), "buses": buses})
+    return out
+
+
 def hhmm(v):
     return f"{v[:2]}:{v[2:]}" if v and len(v) == 4 and v.isdigit() else ""
 
@@ -158,9 +188,21 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/api/health"):
-            return self._json(200, {"ai": bool(KEY), "tts": bool(KEY), "data": bool(DATA_KEY)})
+            return self._json(200, {"ai": bool(KEY), "tts": bool(KEY), "data": bool(DATA_KEY), "bus": bool(DATA_KEY)})
         if self.path.startswith("/api/near"):
             return self.near()
+        if self.path.startswith("/api/bus"):
+            if not DATA_KEY:
+                return self._json(503, {"error": "DATA_GO_KR_KEY 없음"})
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            sid = q.get("stationId", [""])[0]
+            if not sid.isdigit():
+                return self._json(400, {"error": "stationId 필요"})
+            rid = q.get("routeId", [""])[0] or None
+            try:
+                return self._json(200, {"items": bus_arrival(sid, rid)})
+            except Exception as e:  # noqa: BLE001
+                return self._json(502, {"error": str(e)[:200]})
         if self.path.startswith(("/server.py", "/.env", "/worker.js")):
             return self.send_error(404)
         return super().do_GET()

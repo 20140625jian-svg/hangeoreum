@@ -209,3 +209,13 @@ details summary { font-size: 19px; cursor: pointer; min-height: 44px; display: f
 .near-beds small { font-weight: 500; font-size: 14px; }
 a.btn { text-decoration: none; color: inherit; }
 .num-pin span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #0b5d4b; color: #fff; font-weight: 900; font-size: 17px; border: 3px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,.3); }
+
+/* 버스 도착 */
+.bus-card { border-color: #7fb6e8; background: #eef6ff; }
+@media (prefers-color-scheme: dark) { .bus-card { background: #15263a; border-color: #2f5a85; } }
+.bus-card p { margin: 0; }
+.bus-title { font-size: 24px; font-weight: 900; }
+.bus-row { font-size: 22px; margin-top: 6px !important; }
+.bus-row small { font-size: 17px; color: var(--muted); }
+.bus-alt { font-size: 19px; margin-top: 8px !important; padding-top: 8px; border-top: 1px dashed var(--line); }
+.low { color: #1a5fb4; font-weight: 800; }

@@ -54,11 +54,12 @@
   // ───────────────────────── 서버(선택) 확인 ─────────────────────────
   // server.py 를 OPENAI_API_KEY 와 함께 실행하면 AI 해석과 자연스러운 AI 목소리를 씁니다.
   // 서버가 없으면 브라우저 안에서 규칙 기반 해석 + 기기 내장 한국어 목소리로 동작합니다.
-  const server = { ai: false, tts: false, data: false };
-  fetch("api/health").then(r => r.ok ? r.json() : null).then(j => {
-    if (j) { server.ai = !!j.ai; server.tts = !!j.tts; server.data = !!j.data; }
+  const server = { ai: false, tts: false, data: false, bus: false };
+  const healthReady = fetch("api/health").then(r => r.ok ? r.json() : null).then(j => {
+    if (j) { server.ai = !!j.ai; server.tts = !!j.tts; server.data = !!j.data; server.bus = !!j.bus; }
     updateEngineInfo();
   }).catch(() => updateEngineInfo());
+  const healthDone = healthReady.catch(() => {});
 
   // ───────────────────────── 목소리 (자연스럽게) ─────────────────────────
   const synth = window.speechSynthesis;
@@ -472,6 +473,7 @@
   function stopNav() {
     if (nav.watchId != null) navigator.geolocation.clearWatch(nav.watchId);
     nav.watchId = null; clearInterval(nav.demoTimer); nav.demoTimer = null;
+    if (typeof stopBus === "function") stopBus();
     stopCompass();
   }
   function setGpsStatus(t, bad) { const el = $("#gpsStatus"); if (el) { el.textContent = t; el.classList.toggle("bad", !!bad); } }
@@ -487,6 +489,7 @@
         <p class="muted">지금 할 일 ${step.verified ? "" : '<span class="badge">현장 확인 전</span>'}</p>
         <p class="big">${step.screen}</p>
       </section>
+      ${step.bus ? '<section class="card bus-card" id="busCard" hidden aria-live="polite"></section>' : ""}
       <section class="card compass-wrap">
         <div class="compass">
           <svg class="arrow" id="arrow" viewBox="0 0 100 100" aria-hidden="true">
@@ -501,6 +504,7 @@
       <section class="sign" id="signBox">🪧 ${step.sign}</section>
       <div id="miniMap" class="map mini" aria-label="내 위치와 목적지 지도"></div>`;
     makeMiniMap(step);
+    startBus(step);
     $("#arrow").parentElement.classList.toggle("reduce", state.reduce);
     const arrive = btn(step.type === "bus" ? "🚌 버스에서 내렸어요" : "📍 여기에 도착했어요 · 다음", "btn-xl btn-primary", () => nextOutdoor());
     dock.replaceChildren(arrive, row(replayBtn(), helpBtn()));
@@ -1205,6 +1209,58 @@
   function openNear(kind) {
     if (state.screen !== "near") near.back = state.screen === "doctor" ? "talk" : state.screen;
     near.kind = kind || near.kind; $("#sos").hidden = true; go("near");
+  }
+
+  // ───────────────────────── 버스 실시간 도착 (경기도 버스정보) ─────────────────────────
+  const bus = { timer: null, said: {}, lastMin: null };
+  function busBase() {
+    if (API_BASE) return API_BASE + "/";
+    return server.bus ? "" : null;
+  }
+  function stopBus() { clearInterval(bus.timer); bus.timer = null; }
+  async function startBus(step) {
+    stopBus(); bus.said = {};
+    if (!step.bus) return;
+    await healthDone;                       // 서버에 버스 정보가 있는지 먼저 확인
+    if (busBase() === null || !$("#busCard")) return;
+    const tick = () => loadBus(step);
+    tick(); bus.timer = setInterval(tick, 30000);
+  }
+  async function loadBus(step) {
+    const card = $("#busCard"); if (!card) return stopBus();
+    // 버스에 탄 뒤(타는 곳에서 150m 넘게 멀어지면)에는 도착 정보 대신 내릴 곳 안내만
+    const board = RT().outdoor.find(s => s.bus && s.type === "walk") || step;
+    if (step.type === "bus" && nav.pos && distanceM(nav.pos, board) > 150) { card.hidden = true; return; }
+    let items;
+    try {
+      const r = await fetch(`${busBase()}api/bus?stationId=${step.bus.stationId}`);
+      if (!r.ok) throw 0;
+      items = (await r.json()).items || [];
+    } catch { card.hidden = true; return; }
+    const mine = items.find(x => String(x.routeId) === String(step.bus.routeId));
+    const alts = items.filter(x => x !== mine && /서울대병원|서울대학교병원/.test(x.dest) && x.buses.length);
+    const name = step.bus.routeName;
+    const line = (b) => `<b>${b.min <= 1 ? "곧 도착" : `약 ${b.min}분 뒤`}</b>${b.stops ? ` · ${b.stops}정거장 전` : ""}${b.low ? ' · <span class="low">♿ 저상버스</span>' : ""}`;
+    let html = `<p class="bus-title">🚌 ${esc(name)}번 버스</p>`;
+    if (mine && mine.buses.length) html += mine.buses.map((b, i) => `<p class="bus-row">${i === 0 ? "이번" : "다음"} 버스: ${line(b)}</p>`).join("");
+    else html += `<p class="bus-row">지금 오는 버스가 없어요.<br><small>이 정류장이 ${esc(name)}번 출발점이라, 버스가 정류장에 서서 기다렸다가 출발해요.</small></p>`;
+    if (alts.length) html += `<p class="bus-alt">같은 곳(서울대병원)에 가는 다른 버스: ${alts.slice(0, 2).map(a => `<b>${esc(a.routeName)}번</b> ${a.buses[0].min}분 뒤`).join(", ")}</p>`;
+    html += `<p class="muted" style="font-size:14px;margin:6px 0 0">경기도 버스정보 · 30초마다 새로고침</p>`;
+    card.innerHTML = html; card.hidden = false;
+
+    // 음성: 처음 한 번, 그리고 곧 도착할 때 한 번
+    const first = mine && mine.buses[0];
+    if (!bus.said.first) {
+      bus.said.first = true;
+      setTimeout(() => {
+        if (first) speak(`${name}번 버스는 약 ${first.min}분 뒤에 와요.${first.low ? " 저상버스라 보행기로 타기 편해요." : ""}`);
+        else speak(`${name}번은 이 정류장에서 출발하는 버스예요. 정류장에서 기다리시면 돼요.${alts.length ? ` ${alts[0].routeName}번 버스도 서울대병원에 가요.` : ""}`);
+      }, 6000);
+    }
+    if (first && first.min <= 2 && !bus.said.soon) {
+      bus.said.soon = true; vibrate([200, 100, 200]);
+      speak(`${name}번 버스가 곧 들어와요. 앞문 쪽에서 버스가 완전히 멈출 때까지 기다리세요.`);
+    }
   }
 
   // ───────────────────────── 렌더 ─────────────────────────

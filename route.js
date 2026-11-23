@@ -40,21 +40,23 @@ window.ROUTE = {
       screen: "미금역3번출구(마을) 정류장까지 걸어가세요.",
       voice: "이제 미금역 3번 출구 마을버스 정류장으로 가겠습니다. 화살표가 가리키는 쪽으로 천천히 걸어가세요.",
       sign: "정류장 이름판에 '미금역3번출구(마을)'이라고 써 있어요.",
-      lat: 37.34978, lng: 127.10958,
+      lat: 37.3498833, lng: 127.1102333,
       arriveRadius: 20,
-      verified: false, checkedAt: "", source: "경기버스정보 · 지도 추정"
+      bus: { stationId: 206000852, routeId: 241222004, routeName: "7-1" },
+      verified: false, checkedAt: "", source: "정류장 좌표: 경기도 버스정보 API (정류소ID 206000852) · 걷는 길은 현장 확인 필요"
     },
     {
       id: "o3",
       type: "bus",
       place: "마을버스 7-1번 → 서울대병원 정류장",
       screen: "마을버스 7-1번을 타세요. ‘서울대병원’에서 내립니다.",
-      voice: "여기서 마을버스 칠 다시 일 번을 타세요. 서울대병원 정류장에서 내립니다. 내릴 때가 되면 제가 알려 드릴게요.",
+      voice: "여기서 마을버스 칠 다시 일 번을 타세요. 세 정거장 가서, 네 번째 서울대병원 정류장에서 내립니다. 내릴 때가 되면 제가 알려 드릴게요.",
       sign: "버스 앞 유리에 '7-1'이 보이면 손을 들어 타세요. 보행기는 앞문 쪽이 편해요.",
-      lat: 37.35150, lng: 127.12290,
+      lat: 37.3513667, lng: 127.12375,
       arriveRadius: 60,
       nearRadius: 450,
-      verified: false, checkedAt: "", source: "경기버스정보 7-1번 노선"
+      bus: { stationId: 206000852, routeId: 241222004, routeName: "7-1", alightStationId: 206000261 },
+      verified: false, checkedAt: "", source: "경기도 버스정보 API: 7-1번(노선ID 241222004) 미금역3번출구(마을) 출발 → 4번째 정류장 서울대병원(206000261)"
     },
     {
       id: "o4",
