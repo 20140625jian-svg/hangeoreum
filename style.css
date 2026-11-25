@@ -298,3 +298,10 @@ body:has(.fab:not([hidden])) .main { padding-bottom: 96px; }
 /* 글씨 더 크게 */
 html.big-text .main, html.big-text .dock { zoom: 1.15; }
 html.big-text .stepbar { font-size: 22px; }
+
+/* 마이크 시험 */
+.meter { height: 26px; border-radius: 13px; background: var(--bg); border: 2px solid var(--line); overflow: hidden; margin: 8px 0; }
+.meter #mtBar { height: 100%; width: 0; background: linear-gradient(90deg, #1e8a4c, #ffcf3f); transition: width .08s linear; }
+.mt-msg { font-size: 20px; margin: 6px 0 0; }
+.warn-card { border-color: #f0c36d; background: #fff7e0; color: #4a3500; }
+@media (prefers-color-scheme: dark) { .warn-card { background: #3a2f12; color: #f6e6b8; border-color: #6b5518; } }

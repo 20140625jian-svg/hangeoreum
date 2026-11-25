@@ -137,7 +137,10 @@
   let activeRec = null;
   function listen(onText, btn, opts = {}) {
     if (activeRec) { activeRec.stop(); return; }           // 한 번 더 누르면 멈춤
-    if (!SR || !isSecureContext) return typeFallback(onText, "이 브라우저는 바로 듣기를 지원하지 않아요.");
+    if (!SR || !isSecureContext || inApp) {
+      const adv = browserAdvice();
+      return typeFallback(onText, adv ? adv.msg : "이 브라우저는 바로 듣기를 지원하지 않아요.", { openBrowser: !!(adv && adv.btn), openLabel: adv && adv.btn });
+    }
     stopSpeaking();
     const label = btn.dataset.label || (btn.dataset.label = btn.innerHTML);
     let rec;
@@ -158,13 +161,17 @@
       activeRec = null; clearTimeout(maxT); clearTimeout(silenceT);
       btn.classList.remove("listening"); btn.innerHTML = label;
       if (text.trim()) return onText(text.trim());
-      if ((errored === "not-allowed" || errored === "service-not-allowed") && opts.quiet && typeof setHandsfree === "function") setHandsfree(false);
       if (errored === "not-allowed" || errored === "service-not-allowed") {
-        const why = isIOS
-          ? "마이크나 받아쓰기가 꺼져 있어요. 설정 → Safari → 마이크 ‘허용’, 그리고 설정 → 일반 → 키보드 → ‘받아쓰기 활성화’를 켜 주세요."
-          : "마이크가 꺼져 있어요. 주소창 왼쪽 버튼 → 권한 → 마이크 ‘허용’을 눌러 주세요.";
-        speak(why);
-        return typeFallback(onText, why);
+        if (opts.quiet) {
+          if (opts.onDenied) return opts.onDenied(errored);
+          // ‘말로만 하기’ 자동 듣기가 막힌 경우 (아이폰은 누를 때만 듣게 할 때가 있음)
+          if (typeof setHandsfree === "function" && HF.on) { HF.on = false; store.set("handsfree", false); fab.classList.remove("hf"); }
+          return speak(isIOS ? "아이폰에서는 말할 때마다 오른쪽 아래 마이크 버튼을 눌러 주세요." : "마이크가 막혀 있어요. 메뉴의 마이크 시험에서 고칠 수 있어요.");
+        }
+        perm.mic = "denied";
+        const why = isIOS ? "마이크나 받아쓰기가 꺼져 있어요." : "마이크가 막혀 있어요.";
+        speak(why + " 마이크 고치는 방법을 볼 수 있어요.");
+        return typeFallback(onText, why, { fixMic: true });
       }
       if (errored === "audio-capture") { speak("다른 앱이 마이크를 쓰고 있어요."); return typeFallback(onText, "다른 앱이 마이크를 쓰고 있어요. 통화나 녹음을 끄고 다시 해 보세요."); }
       if (errored === "network" || errored === "language-not-supported") return typeFallback(onText, "인터넷이 약해서 바로 듣기가 안 돼요.");
@@ -181,7 +188,7 @@
   }
 
   // 대체 입력: 휴대폰 키보드의 🎤 버튼(받아쓰기)은 거의 모든 휴대폰에서 됩니다
-  function typeFallback(onText, reason = "") {
+  function typeFallback(onText, reason = "", fx = {}) {
     const old = $("#typeSheet"); if (old) old.remove();
     const wrap = document.createElement("div");
     wrap.id = "typeSheet"; wrap.className = "overlay sheet"; wrap.setAttribute("role", "dialog");
@@ -191,6 +198,8 @@
         <p class="muted">${isIOS ? "키보드 오른쪽 아래(또는 스페이스 옆)에 있는 마이크 모양이에요." : "키보드 위쪽 줄이나 오른쪽 위에 있는 마이크 모양이에요."} 글자로 써도 돼요.</p>
         <textarea id="typeBox" rows="3" placeholder="예) 분당서울대병원 처음 가요"></textarea>
         <button class="btn btn-xl btn-primary" id="typeOk">✅ 다 말했어요</button>
+        ${fx.fixMic ? '<button class="btn btn-light" id="typeFix">🎙 마이크 고치기 (시험해 보기)</button>' : ""}
+        ${fx.openBrowser ? `<button class="btn btn-light" id="typeOpen">${esc(fx.openLabel || "🌐 다른 브라우저로 열기")}</button>` : ""}
         <button class="btn btn-light" id="typeCancel">닫기</button>
       </div>`;
     document.body.append(wrap);
@@ -198,6 +207,8 @@
     setTimeout(() => box.focus(), 50);
     wrap.querySelector("#typeOk").onclick = () => { const t = box.value.trim(); wrap.remove(); if (t) onText(t); };
     wrap.querySelector("#typeCancel").onclick = () => wrap.remove();
+    const tf = wrap.querySelector("#typeFix"); if (tf) tf.onclick = () => { wrap.remove(); openScreen("mictest"); };
+    const to = wrap.querySelector("#typeOpen"); if (to) to.onclick = () => openInGoodBrowser();
     speak("아래 칸을 누르고, 키보드의 마이크 버튼을 눌러 말씀해 주세요.");
   }
 
@@ -257,7 +268,7 @@
     Object.assign(b, extra); return b;
   }
   function row(...els) { const d = document.createElement("div"); d.className = "row2"; d.append(...els); return d; }
-  function go(screen) { if (screen !== "doctor" && typeof docStopRec === "function") docStopRec(); state.screen = screen; save(); stopNav(); render(); window.scrollTo(0, 0); }
+  function go(screen) { if (typeof micTestStop === "function") micTestStop(); if (screen !== "doctor" && typeof docStopRec === "function") docStopRec(); state.screen = screen; save(); stopNav(); render(); window.scrollTo(0, 0); }
   const replayBtn = () => btn("🔁 다시 듣기", "btn-light", () => speak(state.lastSaid, { force: true }));
   const helpBtn = () => btn("🙋 도움 요청", "btn-help", openHelp);
 
@@ -724,7 +735,7 @@
         <div><div class="v">${icon} ${title}</div><div class="k">${desc}</div></div>
         <button class="edit" data-perm="${k}">${perm[k] === "granted" ? "✅ 켜짐" : "켜기"}</button>
       </div>
-      ${perm[k] === "denied" || perm[k] === "error" || perm[k] === "insecure" ? `<div class="sign" style="font-size:18px">${perm[k] === "insecure" ? "https 주소로 열어야 해요." : fixGuide(k)}</div>` : ""}`;
+      ${perm[k] === "denied" || perm[k] === "error" || perm[k] === "insecure" ? `<div class="sign" style="font-size:18px">${perm[k] === "insecure" ? "https 주소로 열어야 해요." : k === "mic" && !inApp ? micDeniedGuide() : fixGuide(k)}</div>` : ""}`;
     main.innerHTML = `
       <section class="card"><p class="big">길 안내를 하려면<br>두 가지를 켜 주세요.</p>
         <p class="muted" style="margin-top:8px">버튼을 누르면 휴대폰이 물어봐요. <b>‘허용’</b>을 눌러 주세요.</p></section>
@@ -734,8 +745,11 @@
         ${item("mic", "🎙", "마이크", "말로 병원 이름을 알려 주실 수 있어요")}
         ${item("compass", "🧭", "방향 센서", "휴대폰이 향한 쪽으로 화살표를 돌려요", needCompass)}
       </section>
-      ${!SR ? `<p class="muted">이 브라우저는 말 알아듣기를 지원하지 않아요. 버튼으로도 모두 쓸 수 있어요.</p>` : ""}
+      ${browserAdvice() ? `<section class="card warn-card"><p style="margin:0;font-size:19px">⚠️ ${esc(browserAdvice().msg)}</p>${browserAdvice().btn ? `<button class="btn btn-primary" id="permOpen" style="margin-top:10px;width:100%">${browserAdvice().btn}</button>` : ""}</section>` : ""}
+      <button class="btn btn-light" id="permMicTest" style="width:100%">🎙 마이크가 잘 되는지 시험해 보기</button>
       <p class="muted">이름·음성 녹음은 저장하지 않아요. 위치는 길 안내에만 쓰고 어디에도 보내지 않아요.</p>`;
+    const po = $("#permOpen"); if (po) po.onclick = openInGoodBrowser;
+    $("#permMicTest").onclick = () => openScreen("mictest");
     main.querySelectorAll("[data-perm]").forEach(b => b.onclick = async () => {
       const k = b.dataset.perm; b.textContent = "확인 중…";
       perm[k] = k === "loc" ? await requestLocation() : k === "mic" ? await requestMic() : await requestCompass();
@@ -1926,6 +1940,7 @@
       ["📷", "여기가 어디?", () => openScreen("where")],
       ["🌐", "외국어·필담", () => openScreen("lang")],
       ["🔠", state.big ? "글씨 보통으로" : "글씨 더 크게", () => setBig(!state.big)],
+      ["🎙", "마이크 시험·고치기", () => openScreen("mictest")],
       ["⚙︎", "설정 (목소리·권한)", () => openSettings()],
       ["✖", "닫기", () => {}]
     ];
@@ -1941,6 +1956,134 @@
   state.big = store.get("big", false);
   document.documentElement.classList.toggle("big-text", state.big);
 
+  // ───────────────────────── 마이크가 되게: 시험 · 다른 브라우저로 열기 ─────────────────────────
+  const isSamsung = /SamsungBrowser/i.test(UA);
+  const isKakao = /KAKAOTALK/i.test(UA);
+  const isChromeAndroid = isAndroid && /Chrome\//.test(UA) && !isSamsung && !inApp && !/EdgA|OPR|Whale|NAVER/i.test(UA);
+  const isSafariIOS = isIOS && /Safari\//.test(UA) && !/CriOS|FxiOS|EdgiOS|NAVER|KAKAOTALK|Whale/i.test(UA);
+  // 말 알아듣기가 잘 되는 브라우저인지
+  function micBrowserOK() { return !!SR && !inApp && !isSamsung; }
+  // 지금 페이지를 Chrome(안드로이드) / 기본 브라우저(카카오톡)로 다시 열기
+  function openInGoodBrowser() {
+    const url = location.href;
+    if (isKakao) { location.href = "kakaotalk://web/openExternal?url=" + encodeURIComponent(url); return; }
+    if (isAndroid) {
+      const u = new URL(url);
+      location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+      return;
+    }
+    // 아이폰 앱 안 브라우저는 직접 열어야 함
+    navigator.clipboard && navigator.clipboard.writeText(url).catch(() => {});
+    alert("주소를 복사했어요.\n\n오른쪽 아래(또는 위) ⋯ 버튼 → ‘Safari로 열기’를 누르거나,\nSafari를 열고 주소창에 붙여 넣어 주세요.");
+  }
+  function browserAdvice() {
+    if (isKakao) return { msg: "카카오톡 안에서 열려 있어요. 카카오톡 안에서는 마이크가 잘 안 돼요.", btn: "🌐 기본 브라우저로 열기" };
+    if (inApp) return { msg: "다른 앱 안의 브라우저로 열려 있어요. 여기서는 마이크가 잘 안 돼요.", btn: isAndroid ? "🌐 Chrome으로 열기" : "🌐 Safari로 여는 방법" };
+    if (isSamsung) return { msg: "삼성 인터넷은 ‘말 알아듣기’를 지원하지 않아요. Chrome으로 열면 돼요.", btn: "🌐 Chrome으로 열기" };
+    if (!SR && isAndroid) return { msg: "이 브라우저는 ‘말 알아듣기’를 지원하지 않아요. Chrome으로 열어 주세요.", btn: "🌐 Chrome으로 열기" };
+    if (!SR && isIOS) return { msg: "이 브라우저는 ‘말 알아듣기’를 지원하지 않아요. Safari로 열어 주세요.", btn: "🌐 Safari로 여는 방법" };
+    if (!SR) return { msg: "이 브라우저는 ‘말 알아듣기’를 지원하지 않아요. Chrome으로 열어 주세요.", btn: null };
+    return null;
+  }
+  function micDeniedGuide() {
+    if (isIOS) return `① Safari 주소창 왼쪽 <b>‘가가’(aA)</b> → <b>웹 사이트 설정</b> → <b>마이크 ‘허용’</b><br>② 그래도 안 되면 아이폰 <b>설정 → 앱 → Safari → 마이크 → 허용</b><br>③ <b>설정 → 일반 → 키보드 → ‘받아쓰기 활성화’</b> 켜기 (말 알아듣기에 필요)<br>④ 이 화면으로 돌아와 <b>새로고침</b>`;
+    if (isAndroid) return `① Chrome 주소창 왼쪽 <b>설정(⚙ 또는 자물쇠)</b> → <b>권한</b> → <b>마이크 ‘허용’</b><br>② 안 보이면 휴대폰 <b>설정 → 애플리케이션 → Chrome → 권한 → 마이크 → 허용</b><br>③ 이 화면으로 돌아와 <b>새로고침</b>`;
+    return "주소창 왼쪽 자물쇠 버튼 → 마이크 ‘허용’ → 새로고침";
+  }
+
+  // 마이크 시험: ① 소리가 들어오는지(막대) ② 말을 글자로 바꾸는지
+  const MT = { stream: null, ctx: null, raf: 0, peak: 0 };
+  function micTestStop() {
+    cancelAnimationFrame(MT.raf);
+    if (MT.stream) MT.stream.getTracks().forEach(t => t.stop());
+    if (MT.ctx) MT.ctx.close().catch(() => {});
+    MT.stream = MT.ctx = null;
+  }
+  async function micLevelTest() {
+    const out = $("#mtLevel"), bar = $("#mtBar");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !isSecureContext) { out.innerHTML = "❌ 이 브라우저는 마이크를 쓸 수 없어요."; return "unsupported"; }
+    out.textContent = "휴대폰이 마이크를 물어보면 ‘허용’을 눌러 주세요…";
+    const slow = setTimeout(() => {
+      out.innerHTML = `⏳ 허용 창이 안 보이나요?<div class="sign" style="font-size:18px;margin-top:8px">화면 위·아래에 작은 창이 떠 있으면 <b>‘허용’</b>을 눌러 주세요.<br>아무것도 없으면:<br>${micDeniedGuide()}</div>`;
+      speak("허용 창이 안 보이면, 화면의 방법대로 마이크를 허용해 주세요.", { force: true });
+    }, 10000);
+    try { MT.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); clearTimeout(slow); }
+    catch (e) {
+      clearTimeout(slow);
+      const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+      perm.mic = denied ? "denied" : "error";
+      out.innerHTML = denied ? `❌ 마이크가 막혀 있어요.<div class="sign" style="font-size:18px;margin-top:8px">${micDeniedGuide()}</div>`
+        : e && e.name === "NotFoundError" ? "❌ 마이크를 찾지 못했어요." : e && e.name === "NotReadableError" ? "❌ 다른 앱(통화·녹음)이 마이크를 쓰고 있어요. 끄고 다시 해 보세요." : "❌ 마이크를 켜지 못했어요.";
+      speak(denied ? "마이크가 막혀 있어요. 화면의 방법대로 허용해 주세요." : "마이크를 켜지 못했어요.", { force: true });
+      return "denied";
+    }
+    perm.mic = "granted";
+    const AC = window.AudioContext || window.webkitAudioContext;
+    MT.ctx = new AC(); const src = MT.ctx.createMediaStreamSource(MT.stream), an = MT.ctx.createAnalyser();
+    an.fftSize = 512; src.connect(an); const buf = new Uint8Array(an.fftSize); MT.peak = 0;
+    out.textContent = "🎙 ‘아-’ 하고 소리를 내 보세요";
+    const t0 = Date.now();
+    await new Promise(res => {
+      const loop = () => {
+        an.getByteTimeDomainData(buf);
+        let sum = 0; for (const v of buf) sum += ((v - 128) / 128) ** 2;
+        const lvl = Math.min(1, Math.sqrt(sum / buf.length) * 6);
+        MT.peak = Math.max(MT.peak, lvl);
+        if (bar) bar.style.width = Math.round(lvl * 100) + "%";
+        if (Date.now() - t0 > 4000) return res();
+        MT.raf = requestAnimationFrame(loop);
+      };
+      loop();
+    });
+    micTestStop();
+    const ok = MT.peak > 0.08;
+    out.innerHTML = ok ? "✅ 마이크 소리가 잘 들어와요." : "⚠️ 소리가 거의 안 들어와요. 휴대폰 아래쪽 마이크 구멍을 막지 말고, 입 가까이에서 다시 해 보세요.";
+    return ok ? "ok" : "quiet";
+  }
+  function renderMicTest() {
+    setStep("🎙 마이크 시험", "말이 잘 들리는지 확인");
+    const adv = browserAdvice();
+    main.innerHTML = `
+      ${adv ? `<section class="card warn-card"><p style="margin:0;font-size:20px">⚠️ ${esc(adv.msg)}</p>${adv.btn ? `<button class="btn btn-primary" id="mtOpen" style="margin-top:10px;width:100%">${adv.btn}</button>` : ""}</section>` : ""}
+      <section class="card">
+        <p class="sum-title" style="font-size:22px">① 마이크에 소리가 들어오나요?</p>
+        <div class="meter"><div id="mtBar"></div></div>
+        <p id="mtLevel" class="mt-msg">아래 ‘시험 시작’을 눌러 주세요.</p>
+      </section>
+      <section class="card">
+        <p class="sum-title" style="font-size:22px">② 말을 글자로 알아듣나요?</p>
+        <p id="mtSR" class="mt-msg">${SR ? "①이 끝나면 아무 말이나 해 보세요. 예) “안녕하세요”" : "❌ 이 브라우저는 말 알아듣기를 지원하지 않아요. 대신 키보드의 🎤 받아쓰기로 쓸 수 있어요."}</p>
+      </section>
+      <p class="muted" style="font-size:16px">🔒 시험할 때 소리는 녹음하거나 저장하지 않아요.</p>`;
+    const ob = $("#mtOpen"); if (ob) ob.onclick = openInGoodBrowser;
+    const start = btn("▶ 시험 시작", "btn-xl btn-talk", async () => {
+      start.disabled = true;
+      const r1 = await micLevelTest();
+      if (r1 === "ok" || r1 === "quiet") {
+        if (!SR) { start.disabled = false; return speak("마이크는 되지만, 이 브라우저는 말 알아듣기를 지원하지 않아요.", { force: true }); }
+        $("#mtSR").textContent = "🎙 지금 ‘안녕하세요’라고 말해 보세요";
+        speakThenListen();
+      } else start.disabled = false;
+    });
+    // 말 알아듣기는 화면을 누른 순간 시작해야 하는 휴대폰이 있어서, 버튼을 하나 더 둠
+    const srBtn = btn("🗣 ②만 다시 해 보기", "btn-light", function () { trySR(this); });
+    function speakThenListen() {
+      start.disabled = false;
+      $("#mtSR").innerHTML = "아래 <b>‘②만 다시 해 보기’</b>를 누르고 ‘안녕하세요’라고 말해 보세요.";
+      speak("이제 아래 버튼을 누르고, 안녕하세요, 라고 말해 보세요.", { force: true });
+    }
+    function trySR(b) {
+      const box = $("#mtSR");
+      listen(t => {
+        box.innerHTML = `✅ 알아들었어요: <b>“${esc(t)}”</b><br>마이크가 잘 돼요!`;
+        speak("잘 알아들었어요. 마이크가 잘 돼요.", { force: true });
+        perm.mic = "granted";
+      }, b, { quiet: true, onIdle: () => { box.innerHTML = "⚠️ 말을 못 들었어요. 버튼을 누르고 바로 또박또박 말해 보세요."; } });
+    }
+    dock.replaceChildren(start, row(srBtn, backBtnTo("mictest")));
+    speak("마이크가 잘 되는지 시험해 볼게요. 노란 시험 시작 버튼을 눌러 주세요.");
+  }
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
@@ -1948,11 +2091,11 @@
     if (state.screen === "done") store.set("trip", null);
     const ms = $("#menuSheet"); if (ms) ms.remove();
     // 큰 "누르고 말하기" 버튼이 이미 있는 화면에서는 떠 있는 마이크를 숨김
-    const f = $("#fab"); if (f) f.hidden = ["home", "talk", "perm"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
+    const f = $("#fab"); if (f) f.hidden = ["home", "talk", "perm", "mictest"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
-    ({ home: renderHome, lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderHome)();
+    ({ mictest: renderMicTest, home: renderHome, lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderHome)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {
