@@ -305,3 +305,8 @@ html.big-text .stepbar { font-size: 22px; }
 .mt-msg { font-size: 20px; margin: 6px 0 0; }
 .warn-card { border-color: #f0c36d; background: #fff7e0; color: #4a3500; }
 @media (prefers-color-scheme: dark) { .warn-card { background: #3a2f12; color: #f6e6b8; border-color: #6b5518; } }
+
+/* 병원 검색 */
+.dept-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+.chip.dept { flex: none; min-height: 44px; font-size: 17px; font-weight: 700; }
+.chip.dept.on { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }

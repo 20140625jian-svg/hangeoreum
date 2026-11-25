@@ -1214,11 +1214,103 @@
     }
     return out;
   }
+  // ── 병원 검색: 이름 · 진료과 · 약국 ──
+  const DEPTS = ["내과", "정형외과", "안과", "이비인후과", "치과", "피부과", "한의원", "가정의학과", "재활의학과", "신경과", "비뇨의학과", "산부인과", "소아청소년과", "약국"];
+  const HEALTH_RE = /병원|의원|의료원|의료센터|보건소|클리닉|치과|한의원|약국|내과|외과|안과|이비인후과|피부과|산부인과|비뇨|소아|정신|재활|가정의학|신경|요양/;
+  function deptOf(q) {
+    const t = q.replace(/\s/g, "");
+    if (/약국|약방/.test(t)) return "약국";
+    if (/소아과|어린이/.test(t)) return "소아청소년과";
+    if (/비뇨/.test(t)) return "비뇨의학과";
+    if (/한방|한의/.test(t)) return "한의원";
+    if (/귀|코|목/.test(t) && /아프|아파|이비|막혀|가려/.test(t)) return "이비인후과";
+    if (/눈/.test(t) && /아프|아파|침침|안보|안 보/.test(t)) return "안과";
+    if (/이빨|이가|잇몸|틀니/.test(t)) return "치과";
+    if (/무릎|허리|관절|어깨|뼈/.test(t)) return "정형외과";
+    return DEPTS.find(d => t.includes(d)) || null;
+  }
+  async function nominatim(q, p, span, bounded) {
+    const vb = [p.lng - span, p.lat + span, p.lng + span, p.lat - span].join(",");
+    const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kr&accept-language=ko&limit=40&extratags=1&addressdetails=1&viewbox=${vb}${bounded ? "&bounded=1" : ""}&q=${encodeURIComponent(q)}`;
+    const r = await fetch(u); if (!r.ok) throw new Error("search");
+    return r.json();
+  }
+  function osmToItem(x) {
+    const t = x.extratags || {}, a = x.address || {};
+    return { name: x.name || x.display_name.split(",")[0], lat: +x.lat, lng: +x.lon,
+      addr: [a.city || a.county, a.borough || a.city_district, a.road, a.house_number].filter(Boolean).join(" "),
+      tel: t.phone || t["contact:phone"] || "",
+      kind: t["healthcare:speciality"] || (x.type === "pharmacy" ? "약국" : x.type === "dentist" ? "치과" : x.type === "hospital" ? "병원" : "의원"),
+      open: t.opening_hours ? "" : "", hours: t.opening_hours || "" };
+  }
+  // 주변 병·의원 목록을 모아 두고(10분), 진료과는 이름·진료과 정보로 걸러 냄
+  const SPEC = { "안과": /ophthalm/, "정형외과": /orthop/, "내과": /internal|gastro|cardio|endocrin/, "이비인후과": /otolaryn|ent\b/, "피부과": /dermat/,
+    "산부인과": /gyn|obstet/, "소아청소년과": /paediat|pediat/, "비뇨의학과": /urolog/, "신경과": /neurolog/, "재활의학과": /rehab|physical/, "가정의학과": /general|family/, "치과": /dent/, "한의원": /traditional|oriental|korean/ };
+  const pool = { key: "", at: 0, items: [] };
+  const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+  async function healthPool(p, span) {
+    const key = `${p.lat.toFixed(2)},${p.lng.toFixed(2)},${span}`;
+    if (pool.key === key && Date.now() - pool.at < 600000) return pool.items;
+    const seen = new Set(), items = [];
+    for (const q of ["[amenity=doctors]", "[amenity=clinic]", "[amenity=hospital]", "[amenity=dentist]"]) {
+      try {
+        for (const x of await nominatim(q, p, span, true)) {
+          const it = osmToItem(x); if (!it.name || seen.has(it.name)) continue;
+          it.spec = ((x.extratags || {})["healthcare:speciality"] || "") + " " + x.type;
+          seen.add(it.name); items.push(it);
+        }
+      } catch {}
+      await sleepMs(1100);   // 무료 지도 서버 예절: 1초에 한 번
+    }
+    Object.assign(pool, { key, at: Date.now(), items });
+    return items;
+  }
+  function matchDept(it, dept) {
+    const short = dept === "소아청소년과" ? "소아" : dept === "비뇨의학과" ? "비뇨" : dept === "가정의학과" ? "가정의학" : dept === "재활의학과" ? "재활" : dept;
+    if (dept !== "치과" && /치과/.test(it.name)) return false;
+    if (dept !== "한의원" && /한의원|한방/.test(it.name)) return false;
+    if (it.name.includes(short)) return true;
+    const re = SPEC[dept]; return !!(re && re.test(it.spec || ""));
+  }
+  async function searchHosp(q, p) {
+    const dept = deptOf(q);
+    const seen = new Set(), out = [];
+    const add = (arr, filter) => arr.forEach(x => {
+      const it = osmToItem(x); if (!it.name || seen.has(it.name)) return;
+      if (filter && !filter(it, x)) return;
+      seen.add(it.name); out.push(it);
+    });
+    if (dept === "약국") {
+      add(await nominatim("[amenity=pharmacy]", p, 0.02, true));
+      if (out.length < 3) add(await nominatim("약국", p, 0.04, true));
+    } else if (dept) {
+      // 진료과: 주변 병·의원(약 3km)에서 이름·진료과 정보로 찾기 → 적으면 약 8km까지 넓힘
+      const pick = (arr) => arr.forEach(it => { if (!seen.has(it.name) && matchDept(it, dept)) { seen.add(it.name); out.push(it); } });
+      pick(await healthPool(p, 0.03));
+      try { add(await nominatim(dept, p, 0.05, true), (it) => matchDept(it, dept)); } catch {}
+      if (out.length < 3) pick(await healthPool(p, 0.08));
+    } else {
+      // 병원 이름: 가까운 곳 먼저, 없으면 전국에서
+      add(await nominatim(q, p, 0.3, false), (it, x) => HEALTH_RE.test(it.name) || ["hospital", "clinic", "doctors", "dentist", "pharmacy"].includes(x.type));
+    }
+    return { list: out, dept };
+  }
+
   async function loadNear() {
     const box = $("#nearList"); if (!box) return;
     near.loading = true; box.innerHTML = `<p class="muted">가까운 ${near.kind === "er" ? "응급실" : "병원"}을 찾는 중…</p>`;
     let p = nav.pos;
     if (!p) { const r = await requestLocation(); p = nav.pos; if (r !== "granted" || !p) { box.innerHTML = `<div class="sign">📍 위치를 알 수 없어요. <button class="btn btn-light" id="nearPerm">위치 켜는 방법 보기</button></div>`; $("#nearPerm").onclick = () => go("perm"); return speak("위치를 알 수 없어요. 위치를 켜 주세요."); } }
+    if (near.query) {
+      box.innerHTML = `<p class="muted">‘${esc(near.query)}’ 찾는 중… <small>(처음엔 주변 병원을 모으느라 5초쯤 걸려요)</small></p>`;
+      try {
+        const { list, dept } = await searchHosp(near.query, p);
+        list.forEach(x => { x.d = distanceM(p, x); });
+        list.sort((a, b) => a.d - b.d);
+        near.list = list.slice(0, 15); near.src = `‘${near.query}’${dept && dept !== near.query ? ` (${dept})` : ""} 검색 · OpenStreetMap`; near.loading = false;
+        return paintNear(p);
+      } catch { box.innerHTML = `<p class="muted">인터넷 연결을 확인해 주세요.</p>`; return; }
+    }
     let list = await fetchPublic(near.kind, p), src = "공공데이터 (국립중앙의료원)";
     if (!list) {
       try { list = await fetchOSM(near.kind, p); src = "OpenStreetMap (무료 지도 데이터 · 공공데이터 키를 연결하면 더 정확해요)"; }
@@ -1233,7 +1325,10 @@
     const box = $("#nearList"); if (!box) return;
     const L0 = near.list;
     $("#nearSrc").textContent = `자료: ${near.src}`;
-    if (!L0.length) { box.innerHTML = `<p class="muted">가까운 곳을 찾지 못했어요.</p>`; return speak("가까운 곳을 찾지 못했어요."); }
+    if (!L0.length) {
+      box.innerHTML = near.query ? `<p class="muted">‘${esc(near.query)}’을(를) 근처에서 찾지 못했어요. 다른 이름이나 진료과로 찾아보세요.</p>` : `<p class="muted">가까운 곳을 찾지 못했어요.</p>`;
+      return speak(near.query ? "찾지 못했어요. 다른 이름으로 찾아보세요." : "가까운 곳을 찾지 못했어요.");
+    }
     box.innerHTML = "";
     L0.forEach((h, i) => {
       const card = document.createElement("section");
@@ -1245,6 +1340,7 @@
           <p class="muted">${distText(h.d)} · ${esc(h.kind || "")}${h.open ? ` · 오늘 ${esc(h.open)}~${esc(h.close || "")}` : ""}</p></div></div>
         ${h.beds != null ? `<p class="near-beds ${h.beds > 0 ? "ok" : "no"}">🛏 응급실 빈 침대 ${h.beds > 0 ? h.beds + "개" : "없음"} <small>${esc(h.bedsAt || "")}</small></p>` : ""}
         ${h.addr ? `<p class="muted" style="font-size:17px">${esc(h.addr)}</p>` : ""}
+        ${h.hours ? `<p class="muted" style="font-size:16px">🕘 ${esc(h.hours)}</p>` : ""}
         <div class="row2"></div>`;
       const r2 = card.querySelector(".row2");
       if (tel) { const a = document.createElement("a"); a.className = "btn btn-light"; a.href = "tel:" + tel; a.innerHTML = "📞 전화"; r2.append(a); }
@@ -1262,11 +1358,17 @@
       m.fitBounds(L.latLngBounds(pts.slice(0, 6)).pad(0.15));
     }
     const f = L0[0];
-    speak(`가장 가까운 ${near.kind === "er" ? "응급실은" : "병원은"} ${f.name}이에요. 여기서 ${distText(f.d).replace("km", "킬로미터").replace("m", "미터")}예요.${f.beds === 0 ? " 지금 응급실 빈 침대가 없다고 나와요. 전화로 먼저 물어보세요." : ""} 전화 버튼이나 길 안내 버튼을 누르세요.`);
+    speak(`${near.query ? `${near.query}, ${L0.length}곳을 찾았어요. 가장 가까운 곳은` : `가장 가까운 ${near.kind === "er" ? "응급실은" : "병원은"}`} ${f.name}이에요. 여기서 ${distText(f.d).replace("km", "킬로미터").replace("m", "미터")}예요.${f.beds === 0 ? " 지금 응급실 빈 침대가 없다고 나와요. 전화로 먼저 물어보세요." : ""} 전화 버튼이나 길 안내 버튼을 누르세요.`);
   }
   function renderNear() {
-    setStep(near.kind === "er" ? "🚑 가까운 응급실" : "🏥 가까운 병원", "");
+    setStep(near.kind === "er" ? "🚑 가까운 응급실" : near.query ? `🔍 ‘${near.query}’ 검색` : "🏥 병원 찾기", "");
     main.innerHTML = `
+      ${near.kind === "hosp" ? `
+      <form id="hSearch" class="search" role="search">
+        <input id="hq" type="search" enterkeyhint="search" placeholder="병원 이름·진료과 (예: 안과)" value="${esc(near.query || "")}" autocomplete="off">
+        <button class="btn btn-primary" type="submit">🔍</button>
+      </form>
+      <div class="dept-chips">${DEPTS.map(d => `<button class="chip dept ${near.query === d ? "on" : ""}" data-dept="${d}">${d}</button>`).join("")}</div>` : ""}
       <div class="tabs" role="tablist">
         <button role="tab" class="tab ${near.kind === "er" ? "on" : ""}" data-k="er" aria-selected="${near.kind === "er"}">🚑 응급실</button>
         <button role="tab" class="tab ${near.kind === "hosp" ? "on" : ""}" data-k="hosp" aria-selected="${near.kind === "hosp"}">🏥 병원·의원</button>
@@ -1275,16 +1377,25 @@
       <div id="nearMap" class="map mini"></div>
       <div id="nearList" class="near-list"></div>
       <p class="muted" id="nearSrc" style="font-size:15px"></p>`;
-    main.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { near.kind = b.dataset.k; renderNear(); });
+    main.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { near.kind = b.dataset.k; near.query = ""; renderNear(); });
+    const doSearch = (q) => { near.query = (q || "").trim(); near.kind = "hosp"; renderNear(); };
+    const hs = $("#hSearch");
+    if (hs) {
+      hs.onsubmit = (e) => { e.preventDefault(); $("#hq").blur(); doSearch($("#hq").value); };
+      main.querySelectorAll("[data-dept]").forEach(b => b.onclick = () => doSearch(near.query === b.dataset.dept ? "" : b.dataset.dept));
+    }
+    const voiceSearch = btn("🎙 말로 찾기", "btn-talk", function () {
+      listen(t => { const d = deptOf(t); doSearch(d || cleanQuery(t).replace(/(근처|가까운|주변|찾아\s*줘|찾아\s*주세요|어디\s*있어|어디예요)/g, "").trim()); }, this);
+    });
     dock.replaceChildren(
-      ...(near.kind === "er" ? [btn("🚨 119 전화", "btn-xl btn-sos", openSOS)] : []),
-      row(btn("🔄 다시 찾기", "btn-light", loadNear), btn("⬅ 돌아가기", "btn-light", () => go(near.back || "home")))
+      ...(near.kind === "er" ? [btn("🚨 119 전화", "btn-xl btn-sos", openSOS)] : [voiceSearch]),
+      row(btn(near.query ? "✖ 검색 지우기" : "🔄 다시 찾기", "btn-light", () => near.query ? doSearch("") : loadNear()), btn("⬅ 돌아가기", "btn-light", () => { near.query = ""; go(near.back || "home"); }))
     );
     loadNear();
   }
-  function openNear(kind) {
+  function openNear(kind, query) {
     if (state.screen !== "near") near.back = state.screen === "doctor" ? "talk" : state.screen;
-    near.kind = kind || near.kind; $("#sos").hidden = true; go("near");
+    near.kind = kind || near.kind; near.query = query || ""; $("#sos").hidden = true; go("near");
   }
 
   // ───────────────────────── 버스 실시간 도착 (경기도 버스정보) ─────────────────────────
@@ -1835,7 +1946,9 @@
     [/여기.*어디|어디야|어디예요|어디에요|사진/, () => openScreen("where")],
     [/택시/, () => openScreen("taxi")],
     [/몇\s*시에?\s*(나가|출발)|출발\s*시간|언제\s*나가/, () => openScreen("plan")],
-    [/약국/, () => { near.kind = "hosp"; openNear("hosp"); }],
+    [/약국/, () => openNear("hosp", "약국")],
+    [/(내과|정형외과|안과|이비인후과|치과|피부과|한의원|가정의학과|재활의학과|신경과|비뇨|산부인과|소아과|소아청소년과)/, (t) => openNear("hosp", deptOf(t))],
+    [/병원.*(검색|찾아)|검색/, () => openNear("hosp")],
     [/응급실/, () => openNear("er")],
     [/병원.*(찾|가까운|근처)|가까운\s*병원/, () => openNear("hosp")],
     [/진료\s*메모|받아\s*적|선생님\s*말씀/, () => openDoctor()],
@@ -1862,7 +1975,7 @@
   }
   function runCommand(t) {
     const hit = CMD.find(([re]) => re.test(t.replace(/\s+/g, " ")));
-    if (hit) { vibrate(40); hit[1](); return true; }
+    if (hit) { vibrate(40); hit[1](t); return true; }
     // 화면 안 버튼 글자와 비슷하면 눌러 주기
     const words = t.replace(/\s/g, "");
     const b = [...document.querySelectorAll("#dock button, #main button")].find(x => { const l = x.textContent.replace(/[^\p{L}\p{N}]/gu, ""); return l.length > 1 && (words.includes(l.slice(0, 4)) || l.includes(words.slice(0, 4))); });
@@ -1906,7 +2019,7 @@
       ${planBanner()}
       ${trip ? `<button class="card resume" id="resume">▶ <b>하던 길 안내 이어서</b><br><span class="muted">${esc(tripPlace || "")}</span></button>` : ""}
       <div class="tiles tiles-2">
-        <button class="tile" data-go="near">🏥<span>가까운 병원·응급실</span></button>
+        <button class="tile" data-go="near">🏥<span>병원 찾기·응급실</span></button>
         <button class="tile" data-go="plan">⏰<span>몇 시에 나갈까</span></button>
         <button class="tile" data-go="doctor">🩺<span>진료 메모</span></button>
         <button class="tile" data-go="guardian">👪<span>${gN ? `보호자 ${gN}명` : "보호자 등록"}</span></button>
@@ -1932,7 +2045,7 @@
     const items = [
       ["🏠", "처음 화면", () => go("home")],
       ["🚶", "병원 가는 길", () => go(tripInProgress() || "talk")],
-      ["🏥", "가까운 병원·응급실", () => openNear("hosp")],
+      ["🏥", "병원 찾기·응급실", () => openNear("hosp")],
       ["⏰", "몇 시에 나갈까", () => openScreen("plan")],
       ["🩺", "진료 메모", () => openDoctor()],
       ["👪", "보호자", () => openGuardian()],
@@ -2091,7 +2204,7 @@
     if (state.screen === "done") store.set("trip", null);
     const ms = $("#menuSheet"); if (ms) ms.remove();
     // 큰 "누르고 말하기" 버튼이 이미 있는 화면에서는 떠 있는 마이크를 숨김
-    const f = $("#fab"); if (f) f.hidden = ["home", "talk", "perm", "mictest"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
+    const f = $("#fab"); if (f) f.hidden = ["home", "talk", "perm", "mictest", "near"].includes(state.screen) && !(typeof HF !== "undefined" && HF.on);
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
