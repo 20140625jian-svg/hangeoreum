@@ -1229,11 +1229,31 @@
     if (/무릎|허리|관절|어깨|뼈/.test(t)) return "정형외과";
     return DEPTS.find(d => t.includes(d)) || null;
   }
+  // "안과", "근처 안과", "무릎이 아파요" → 진료과 검색 / "김안과", "두리이비인후과" → 이름 검색
+  function deptQuery(q) {
+    const d = deptOf(q); if (!d) return null;
+    const rest = q.replace(/\s/g, "").replace(/근처|가까운|주변|찾아줘|찾아주세요|어디|있어|있나요|예요|에요|가고싶어|좀/g, "")
+      .replace(d, "").replace(/소아과|비뇨기과|한방|약방|의원$|병원$/, "");
+    const symptom = /아프|아파|침침|안보|막혀|가려/.test(q);
+    return symptom || rest.length === 0 ? d : null;
+  }
   async function nominatim(q, p, span, bounded) {
     const vb = [p.lng - span, p.lat + span, p.lng + span, p.lat - span].join(",");
     const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kr&accept-language=ko&limit=40&extratags=1&addressdetails=1&viewbox=${vb}${bounded ? "&bounded=1" : ""}&q=${encodeURIComponent(q)}`;
     const r = await fetch(u); if (!r.ok) throw new Error("search");
     return r.json();
+  }
+  // 두 번째 지도 검색(Photon): 이름 검색에 강하고, 한쪽이 막혀도 다른 쪽으로 찾음
+  async function photon(q, p) {
+    const u = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${p.lat}&lon=${p.lng}&limit=15`;
+    const r = await fetch(u); if (!r.ok) throw new Error("photon");
+    const j = await r.json();
+    return (j.features || []).filter(f => (f.properties.countrycode || "KR") === "KR").map(f => {
+      const pr = f.properties, [lng, lat] = f.geometry.coordinates;
+      return { _type: pr.osm_value, name: pr.name, lat, lng,
+        addr: [pr.city || pr.county, pr.district, pr.street, pr.housenumber].filter(Boolean).join(" "),
+        tel: "", kind: pr.osm_value === "pharmacy" ? "약국" : pr.osm_value === "dentist" ? "치과" : pr.osm_value === "hospital" ? "병원" : "의원", hours: "" };
+    });
   }
   function osmToItem(x) {
     const t = x.extratags || {}, a = x.address || {};
@@ -1262,7 +1282,8 @@
       } catch {}
       await sleepMs(1100);   // 무료 지도 서버 예절: 1초에 한 번
     }
-    Object.assign(pool, { key, at: Date.now(), items });
+    if (items.length) Object.assign(pool, { key, at: Date.now(), items });   // 실패한 결과는 기억하지 않음
+    near.poolFail = !items.length;
     return items;
   }
   function matchDept(it, dept) {
@@ -1272,8 +1293,91 @@
     if (it.name.includes(short)) return true;
     const re = SPEC[dept]; return !!(re && re.test(it.spec || ""));
   }
+  // ── 이름 검색: 줄임말·띄어쓰기·오타에도 찾기 ──
+  const ALIAS = [
+    [/^(분당)?서울대(학교)?(병원)?$|^서울대학교분당/, "분당서울대학교병원"],
+    [/^(분당)?차(병원)?$|^차의과/, "분당차병원"],
+    [/^(분당)?제생(병원)?$/, "분당제생병원"],
+    [/^아산(병원)?$|^서울아산/, "서울아산병원"],
+    [/^삼성(병원)?$|^삼성서울/, "삼성서울병원"],
+    [/^세브란스/, "세브란스병원"],
+    [/^(서울)?성모(병원)?$/, "서울성모병원"],
+    [/^(분당)?보훈(병원)?$/, "중앙보훈병원"],
+    [/^성남(시)?의료원$/, "성남시의료원"],
+    [/^(분당)?보건소$|^성남.*보건소/, "분당구보건소"]
+  ];
+  const normName = (t) => t.toLowerCase().replace(/[\s()·.,\-_/'"‘’“”]/g, "").replace(/대병원$/, "대학교병원");
+  const coreName = (t) => normName(t).replace(/(대학교병원|병원|의원|클리닉|센터|의료원)$/, "");
+  function bigrams(t) { const a = []; for (let i = 0; i < t.length - 1; i++) a.push(t.slice(i, i + 2)); return a; }
+  function dice(a, b) {
+    const A = bigrams(a), B = bigrams(b); if (!A.length || !B.length) return 0;
+    const rest = [...B]; let hit = 0;
+    A.forEach(g => { const i = rest.indexOf(g); if (i >= 0) { hit++; rest.splice(i, 1); } });
+    return (2 * hit) / (A.length + B.length);
+  }
+  // 한글을 자모로 풀기: '채' → ㅊㅐ  (모음 하나 틀린 오타도 비슷하게 봄)
+  function jamo(t) {
+    let o = "";
+    for (const ch of t) {
+      const c = ch.charCodeAt(0) - 0xac00;
+      if (c < 0 || c > 11171) { o += ch; continue; }
+      o += String.fromCharCode(0x1100 + Math.floor(c / 588), 0x1161 + Math.floor((c % 588) / 28)) + (c % 28 ? String.fromCharCode(0x11a7 + (c % 28)) : "");
+    }
+    return o;
+  }
+  function nameScore(q, name) {
+    const a = coreName(q), b = normName(name), bc = coreName(name);
+    if (!a) return 0;
+    if (bc === a || b === normName(q)) return 1;
+    if (b.includes(a)) return 0.92 - Math.min(0.2, (b.length - a.length) * 0.01);
+    if (a.includes(bc) && bc.length >= 2) return 0.8;
+    // 오타가 한두 글자면 0.5 이상 (짧은 이름은 자모 비교를 하지 않아 엉뚱한 결과를 막음)
+    const j = a.length >= 3 && bc.length >= 2 ? dice(jamo(a), jamo(bc)) * 0.9 : 0;
+    return Math.max(dice(a, b), dice(a, bc), j);
+  }
+  function aliasOf(q) { const n = normName(q); const hit = ALIAS.find(([re]) => re.test(n)); return hit ? hit[1] : null; }
+  async function searchByName(q, p) {
+    const seen = new Set(), out = [];
+    const push = (it, score) => {
+      if (!it.name || seen.has(it.name)) return;
+      // 띄어쓰기만 다른 같은 병원(300m 안)은 하나만
+      if (out.some(o => normName(o.name) === normName(it.name) && distanceM(o, it) < 300)) return;
+      seen.add(it.name); it.score = score; out.push(it);
+    };
+    // 1) 내 주변 병·의원 목록에서 비슷한 이름 (오타·줄임말에 강함)
+    const scan = (items) => items.forEach(it => { const sc = nameScore(q, it.name); if (sc >= 0.55) push(it, sc); });
+    try { scan(await healthPool(p, 0.03)); } catch {}
+    // 2) 지도 검색: 별명 → 원래 말 → '병원' 붙이기 → 띄어쓰기 없애기 (찾으면 멈춤)
+    const al = aliasOf(q);
+    const spaced = q.replace(/\s/g, "").replace(/(.{2,})(이비인후과|정형외과|재활의학과|가정의학과|소아청소년과|비뇨의학과|산부인과|내과|안과|치과|피부과|한의원|신경과|외과)(의원)?$/, "$1 $2$3");
+    const variants = [...new Set([al, q, spaced, /병원|의원|약국|치과|센터|보건소|과$/.test(q) ? null : q + "병원", q.replace(/\s/g, "")].filter(Boolean))];
+    const take = (it, type) => {
+      if (!it.name) return false;
+      const health = HEALTH_RE.test(it.name) || ["hospital", "clinic", "doctors", "dentist", "pharmacy"].includes(type);
+      if (!health) return false;
+      push(it, Math.max(nameScore(q, it.name), al && normName(it.name) === normName(al) ? 1 : 0, 0.55));
+      return true;
+    };
+    for (const v of variants) {
+      let got = 0;
+      try { for (const it of await photon(v, p)) if (take(it, it._type)) got++; } catch {}
+      if (!got) { try { for (const x of await nominatim(v, p, 0.3, false)) if (take(osmToItem(x), x.type)) got++; } catch {} }
+      if (got) break;
+      await sleepMs(600);
+    }
+    // 3) 그래도 없으면 더 넓은 주변(약 8km)에서 비슷한 이름
+    if (!out.length) { try { scan(await healthPool(p, 0.08)); } catch {} }
+    return out;
+  }
+  // 글자 치는 동안 주변 목록에서 바로 추천 (인터넷 요청 없음)
+  function nameSuggest(q) {
+    if (!q || q.length < 2 || !pool.items.length) return [];
+    return pool.items.map(it => ({ it, sc: nameScore(q, it.name) })).filter(x => x.sc >= 0.5)
+      .sort((a, b) => b.sc - a.sc).slice(0, 5).map(x => x.it);
+  }
+
   async function searchHosp(q, p) {
-    const dept = deptOf(q);
+    const dept = deptQuery(q);
     const seen = new Set(), out = [];
     const add = (arr, filter) => arr.forEach(x => {
       const it = osmToItem(x); if (!it.name || seen.has(it.name)) return;
@@ -1289,9 +1393,10 @@
       pick(await healthPool(p, 0.03));
       try { add(await nominatim(dept, p, 0.05, true), (it) => matchDept(it, dept)); } catch {}
       if (out.length < 3) pick(await healthPool(p, 0.08));
+      // 주변 목록을 못 받았을 때(지도 서버가 바쁠 때) 두 번째 검색으로
+      if (out.length < 3) { try { (await photon(dept, p)).forEach(it => { if (!seen.has(it.name) && matchDept(it, dept) && distanceM(p, it) < 15000) { seen.add(it.name); out.push(it); } }); } catch {} }
     } else {
-      // 병원 이름: 가까운 곳 먼저, 없으면 전국에서
-      add(await nominatim(q, p, 0.3, false), (it, x) => HEALTH_RE.test(it.name) || ["hospital", "clinic", "doctors", "dentist", "pharmacy"].includes(x.type));
+      return { list: await searchByName(q, p), dept: null, byName: true };
     }
     return { list: out, dept };
   }
@@ -1304,9 +1409,10 @@
     if (near.query) {
       box.innerHTML = `<p class="muted">‘${esc(near.query)}’ 찾는 중… <small>(처음엔 주변 병원을 모으느라 5초쯤 걸려요)</small></p>`;
       try {
-        const { list, dept } = await searchHosp(near.query, p);
+        const { list, dept, byName } = await searchHosp(near.query, p);
         list.forEach(x => { x.d = distanceM(p, x); });
-        list.sort((a, b) => a.d - b.d);
+        // 이름 검색은 ‘얼마나 비슷한지’ 먼저, 같으면 가까운 순
+        list.sort((a, b) => byName ? (Math.round((b.score || 0) * 10) - Math.round((a.score || 0) * 10)) || a.d - b.d : a.d - b.d);
         near.list = list.slice(0, 15); near.src = `‘${near.query}’${dept && dept !== near.query ? ` (${dept})` : ""} 검색 · OpenStreetMap`; near.loading = false;
         return paintNear(p);
       } catch { box.innerHTML = `<p class="muted">인터넷 연결을 확인해 주세요.</p>`; return; }
@@ -1326,8 +1432,10 @@
     const L0 = near.list;
     $("#nearSrc").textContent = `자료: ${near.src}`;
     if (!L0.length) {
-      box.innerHTML = near.query ? `<p class="muted">‘${esc(near.query)}’을(를) 근처에서 찾지 못했어요. 다른 이름이나 진료과로 찾아보세요.</p>` : `<p class="muted">가까운 곳을 찾지 못했어요.</p>`;
-      return speak(near.query ? "찾지 못했어요. 다른 이름으로 찾아보세요." : "가까운 곳을 찾지 못했어요.");
+      const busy = near.poolFail && near.query && deptQuery(near.query);
+      box.innerHTML = busy ? `<p class="muted">지도 정보 서버가 바빠서 진료과 목록을 못 받았어요. 잠시 뒤 <b>다시 찾기</b>를 눌러 주세요. 병원 이름으로 찾으면 바로 될 수 있어요.</p>`
+        : near.query ? `<p class="muted">‘${esc(near.query)}’을(를) 근처에서 찾지 못했어요. 다른 이름이나 진료과로 찾아보세요.</p>` : `<p class="muted">가까운 곳을 찾지 못했어요.</p>`;
+      return speak(busy ? "지도 서버가 바빠요. 잠시 뒤에 다시 찾아 주세요." : near.query ? "찾지 못했어요. 다른 이름으로 찾아보세요." : "가까운 곳을 찾지 못했어요.");
     }
     box.innerHTML = "";
     L0.forEach((h, i) => {
@@ -1368,6 +1476,7 @@
         <input id="hq" type="search" enterkeyhint="search" placeholder="병원 이름·진료과 (예: 안과)" value="${esc(near.query || "")}" autocomplete="off">
         <button class="btn btn-primary" type="submit">🔍</button>
       </form>
+      <div id="hSuggest" class="suggest" hidden></div>
       <div class="dept-chips">${DEPTS.map(d => `<button class="chip dept ${near.query === d ? "on" : ""}" data-dept="${d}">${d}</button>`).join("")}</div>` : ""}
       <div class="tabs" role="tablist">
         <button role="tab" class="tab ${near.kind === "er" ? "on" : ""}" data-k="er" aria-selected="${near.kind === "er"}">🚑 응급실</button>
@@ -1377,21 +1486,38 @@
       <div id="nearMap" class="map mini"></div>
       <div id="nearList" class="near-list"></div>
       <p class="muted" id="nearSrc" style="font-size:15px"></p>`;
+    const keep = renderNear.keepList; renderNear.keepList = false;
     main.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { near.kind = b.dataset.k; near.query = ""; renderNear(); });
     const doSearch = (q) => { near.query = (q || "").trim(); near.kind = "hosp"; renderNear(); };
     const hs = $("#hSearch");
     if (hs) {
-      hs.onsubmit = (e) => { e.preventDefault(); $("#hq").blur(); doSearch($("#hq").value); };
+      hs.onsubmit = (e) => { e.preventDefault(); $("#hq").blur(); $("#hSuggest").hidden = true; doSearch($("#hq").value); };
+      const hq = $("#hq"), sg = $("#hSuggest");
+      // 주변 병·의원 목록을 미리 모아 두면 글자 칠 때 바로 추천돼요
+      if (nav.pos) healthPool(nav.pos, 0.03).catch(() => {});
+      let tmr = 0;
+      hq.oninput = () => {
+        clearTimeout(tmr);
+        tmr = setTimeout(() => {
+          const list = deptQuery(hq.value) ? [] : nameSuggest(hq.value.trim());
+          sg.innerHTML = ""; sg.hidden = !list.length;
+          list.forEach(it => sg.append(btn(`🏥 ${esc(it.name)} <small>${nav.pos ? distText(distanceM(nav.pos, it)) : ""}</small>`, "suggest-item", () => {
+            sg.hidden = true; near.query = it.name; near.kind = "hosp";
+            near.list = [Object.assign(it, { d: nav.pos ? distanceM(nav.pos, it) : 0 })]; near.src = "주변 병원 목록";
+            renderNear.keepList = true; renderNear();
+          })));
+        }, 200);
+      };
       main.querySelectorAll("[data-dept]").forEach(b => b.onclick = () => doSearch(near.query === b.dataset.dept ? "" : b.dataset.dept));
     }
     const voiceSearch = btn("🎙 말로 찾기", "btn-talk", function () {
-      listen(t => { const d = deptOf(t); doSearch(d || cleanQuery(t).replace(/(근처|가까운|주변|찾아\s*줘|찾아\s*주세요|어디\s*있어|어디예요)/g, "").trim()); }, this);
+      listen(t => { const d = deptQuery(t); doSearch(d || cleanQuery(t).replace(/(근처|가까운|주변|찾아\s*줘|찾아\s*주세요|어디\s*있어|어디예요)/g, "").trim()); }, this);
     });
     dock.replaceChildren(
       ...(near.kind === "er" ? [btn("🚨 119 전화", "btn-xl btn-sos", openSOS)] : [voiceSearch]),
       row(btn(near.query ? "✖ 검색 지우기" : "🔄 다시 찾기", "btn-light", () => near.query ? doSearch("") : loadNear()), btn("⬅ 돌아가기", "btn-light", () => { near.query = ""; go(near.back || "home"); }))
     );
-    loadNear();
+    if (keep && near.list.length && nav.pos) paintNear(nav.pos); else loadNear();
   }
   function openNear(kind, query) {
     if (state.screen !== "near") near.back = state.screen === "doctor" ? "talk" : state.screen;
@@ -1947,7 +2073,7 @@
     [/택시/, () => openScreen("taxi")],
     [/몇\s*시에?\s*(나가|출발)|출발\s*시간|언제\s*나가/, () => openScreen("plan")],
     [/약국/, () => openNear("hosp", "약국")],
-    [/(내과|정형외과|안과|이비인후과|치과|피부과|한의원|가정의학과|재활의학과|신경과|비뇨|산부인과|소아과|소아청소년과)/, (t) => openNear("hosp", deptOf(t))],
+    [/(내과|정형외과|안과|이비인후과|치과|피부과|한의원|가정의학과|재활의학과|신경과|비뇨|산부인과|소아과|소아청소년과)/, (t) => openNear("hosp", deptQuery(t) || t.replace(/\s*(찾아\s*줘|찾아\s*주세요|어디\s*있어|가고\s*싶어)\s*$/, "").trim())],
     [/병원.*(검색|찾아)|검색/, () => openNear("hosp")],
     [/응급실/, () => openNear("er")],
     [/병원.*(찾|가까운|근처)|가까운\s*병원/, () => openNear("hosp")],
@@ -2016,6 +2142,10 @@
       <section class="card hello">
         <p class="big">안녕하세요.<br>무엇을 도와드릴까요?</p>
       </section>
+      <form id="homeSearch" class="search home-search" role="search">
+        <input id="homeQ" type="search" enterkeyhint="search" placeholder="🔍 병원 이름으로 찾기" autocomplete="off">
+        <button class="btn btn-primary" type="submit">찾기</button>
+      </form>
       ${planBanner()}
       ${trip ? `<button class="card resume" id="resume">▶ <b>하던 길 안내 이어서</b><br><span class="muted">${esc(tripPlace || "")}</span></button>` : ""}
       <div class="tiles tiles-2">
@@ -2032,6 +2162,7 @@
     const pb = $("#planBanner"); if (pb) pb.onclick = () => openScreen("plan");
     const rs = $("#resume"); if (rs) rs.onclick = () => go(trip);
     $("#moreTools").onclick = openMenu;
+    $("#homeSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#homeQ").value.trim(); if (q) openNear("hosp", deptQuery(q) || q); else openNear("hosp"); };
     dock.replaceChildren(btn("🚶 병원 가는 길 시작", "btn-xl btn-talk", () => go("talk")));
     speak(trip ? "안녕하세요. 하던 길 안내를 이어서 하시려면 초록 테두리 버튼을 누르세요." : "안녕하세요. 병원 한걸음이에요. 병원에 가시려면 아래 노란 버튼을 누르세요.");
   }

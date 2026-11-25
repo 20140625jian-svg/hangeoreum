@@ -310,3 +310,11 @@ html.big-text .stepbar { font-size: 22px; }
 .dept-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
 .chip.dept { flex: none; min-height: 44px; font-size: 17px; font-weight: 700; }
 .chip.dept.on { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+
+/* 이름 검색 추천 */
+.suggest { display: flex; flex-direction: column; border: 2px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); margin-top: -6px; }
+.suggest[hidden] { display: none; }
+.suggest-item { min-height: 56px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: var(--card); font-size: 20px; font-weight: 700; padding: 8px 14px; }
+.suggest-item:last-child { border-bottom: 0; }
+.suggest-item small { color: var(--muted); font-weight: 500; font-size: 16px; margin-left: 6px; }
+.home-search input { font-size: 21px; }
