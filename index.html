@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b">
   <title>병원한걸음</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="style.css?v=20">
+  <link rel="stylesheet" href="style.css?v=21">
 </head>
 <body>
   <header class="topbar">
@@ -65,6 +65,11 @@
       <label class="field row"><input id="reduceMotion" type="checkbox"> 움직임 줄이기</label>
       <label class="field row"><input id="hfToggle" type="checkbox"> 🎙 말로만 하기 (안내가 끝나면 자동으로 들어요)</label>
       <p id="engineInfo" class="muted"></p>
+      <div class="field">🚌 버스 정보 키 (팀원용) <small class="muted" id="busKeyState"></small>
+        <input id="busKeyInput" type="password" autocomplete="off" placeholder="공공데이터포털 일반 인증키">
+        <div class="row gap"><button id="busKeySave" class="btn btn-light">저장</button><button id="busKeyDel" class="btn btn-light">지우기</button></div>
+        <small class="muted">이 휴대폰에만 저장돼요. 다른 사람과 나누지 마세요.</small>
+      </div>
       <div class="row gap">
         <button id="testVoice" class="btn btn-light">목소리 들어보기</button>
         <button id="permAgain" class="btn btn-light">위치·마이크 켜기</button>
@@ -76,8 +81,8 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="config.js?v=20"></script>
-  <script src="route.js?v=20"></script>
-  <script src="app.js?v=20"></script>
+  <script src="config.js?v=21"></script>
+  <script src="route.js?v=21"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

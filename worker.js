@@ -78,6 +78,18 @@ export default {
     const cors = { "Access-Control-Allow-Origin": ALLOW_ORIGINS.includes(origin) ? origin : ALLOW_ORIGINS[0], "Vary": "Origin", "Content-Type": "application/json; charset=utf-8" };
     const u = new URL(req.url);
     if (u.pathname === "/api/health") return new Response(JSON.stringify({ data: !!env.DATA_GO_KR_KEY, bus: !!env.DATA_GO_KR_KEY }), { headers: cors });
+    if (u.pathname === "/api/stops") {
+      const lat = +u.searchParams.get("lat"), lng = +u.searchParams.get("lng");
+      if (!isFinite(lat) || !isFinite(lng)) return new Response('{"error":"lat, lng 필요"}', { status: 400, headers: cors });
+      try {
+        const key = decodeURIComponent(env.DATA_GO_KR_KEY || "");
+        const qs = new URLSearchParams({ serviceKey: key, x: lng.toFixed(6), y: lat.toFixed(6), format: "json" });
+        const j = await (await fetch(`https://apis.data.go.kr/6410000/busstationservice/v2/getBusStationAroundListv2?${qs}`)).json();
+        let rows = j?.response?.msgBody?.busStationAroundList || []; if (!Array.isArray(rows)) rows = [rows];
+        const items = rows.map(x => ({ id: x.stationId, name: x.stationName, no: String(x.mobileNo || "").trim(), lat: +x.y, lng: +x.x, d: x.distance }));
+        return new Response(JSON.stringify({ items }), { headers: { ...cors, "Cache-Control": "max-age=300" } });
+      } catch (e) { return new Response(JSON.stringify({ error: String(e).slice(0, 200) }), { status: 502, headers: cors }); }
+    }
     if (u.pathname === "/api/bus") {
       const sid = u.searchParams.get("stationId") || "";
       if (!/^\d+$/.test(sid)) return new Response('{"error":"stationId 필요"}', { status: 400, headers: cors });

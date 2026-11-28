@@ -332,3 +332,27 @@ html.big-text .stepbar { font-size: 22px; }
 .ls-text { font-size: 28px; font-weight: 700; margin: 0; min-height: 1.5em; line-height: 1.45; color: #fff7d6; word-break: keep-all; }
 .ls-btns { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
 .ls-btns .btn-light { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.35); }
+
+/* 버스 정류장 안내 */
+.stop-item { justify-content: flex-start; gap: 12px; text-align: left; min-height: 72px; }
+.stop-txt { display: flex; flex-direction: column; flex: 1; font-size: 21px; }
+.stop-txt small { font-size: 16px; color: var(--muted); font-weight: 500; }
+.stop-go { font-size: 30px; color: var(--muted); }
+.arr-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.arr-row:last-child { border-bottom: 0; }
+.arr-row.hosp { background: #eef8f2; margin: 0 -10px; padding: 10px; border-radius: 12px; }
+@media (prefers-color-scheme: dark) { .arr-row.hosp { background: #16302a; } }
+.arr-no { flex: none; min-width: 74px; padding: 6px 8px; border-radius: 10px; background: #1a5fb4; color: #fff; font-weight: 900; font-size: 22px; text-align: center; }
+.arr-info { font-size: 20px; display: flex; flex-direction: column; gap: 2px; }
+.arr-info small { font-size: 16px; }
+.soon { color: var(--danger); }
+/* 병원 안 안내 */
+.visit-now .big { margin-top: 4px; }
+.inside-tiles { grid-template-columns: repeat(4, 1fr); }
+.inside-tiles .tile { min-height: 86px; font-size: 28px; }
+.inside-tiles .tile span { font-size: 14px; }
+.visit-list { margin: 0; padding-left: 24px; font-size: 19px; line-height: 1.8; }
+.visit-list li.done { color: var(--muted); text-decoration: line-through; }
+.visit-list li.cur { font-weight: 900; color: var(--primary); }
+.progress i.cur { outline: 3px solid var(--accent); }
+.tiles-2 .tile { min-height: 104px; }
