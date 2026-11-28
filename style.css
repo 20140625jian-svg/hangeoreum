@@ -370,3 +370,10 @@ html.big-text .stepbar { font-size: 22px; }
 .exit-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
 .exit-item { font-size: 19px; min-height: 56px; }
 .exit-item small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+
+/* 어떻게 갈까요 */
+.plan-item { justify-content: flex-start; align-items: flex-start; gap: 12px; text-align: left; font-weight: 500; }
+.plan-item .arr-no { margin-top: 2px; }
+.plan-txt { display: flex; flex-direction: column; gap: 4px; font-size: 20px; }
+.plan-txt small { font-size: 16px; color: var(--muted); line-height: 1.4; }
+#planList { display: flex; flex-direction: column; gap: 8px; }
