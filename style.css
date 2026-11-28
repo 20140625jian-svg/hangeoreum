@@ -356,3 +356,17 @@ html.big-text .stepbar { font-size: 22px; }
 .visit-list li.cur { font-weight: 900; color: var(--primary); }
 .progress i.cur { outline: 3px solid var(--accent); }
 .tiles-2 .tile { min-height: 104px; }
+
+/* 현재 정류장 · 버스 타고 가기 · 지하철 */
+.cur-stop { border: 3px solid var(--primary); display: flex; flex-direction: column; gap: 8px; }
+.ride-left { font-size: 28px; font-weight: 900; margin: 6px 0 !important; color: var(--primary); }
+.ride-list { margin: 0; padding-left: 22px; font-size: 19px; line-height: 1.9; }
+.ride-list li.done { color: var(--muted); }
+.ride-list li.cur { font-weight: 900; color: #1a5fb4; }
+.ride-list li.goal { font-weight: 900; }
+.stop-item.hosp { border-color: #9fd8c5; }
+.arr-row[role=button] { cursor: pointer; }
+.near-no.sub { background: #6b3fa0; }
+.exit-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.exit-item { font-size: 19px; min-height: 56px; }
+.exit-item small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 4px; }

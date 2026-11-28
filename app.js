@@ -622,6 +622,7 @@
         <p class="big">${step.screen}</p>
       </section>
       ${step.bus ? '<section class="card bus-card" id="busCard" hidden aria-live="polite"></section>' : ""}
+      ${step.type === "bus" ? '<section class="card bus-card" id="rideCard" hidden aria-live="polite"></section>' : ""}
       <section class="card compass-wrap">
         <div class="compass">
           <div class="ring" id="ring" aria-hidden="true"><b class="n">북</b><b class="e">동</b><b class="s">남</b><b class="w">서</b></div>
@@ -639,6 +640,7 @@
       <div id="miniMap" class="map mini" aria-label="내 위치와 목적지 지도"></div>`;
     makeMiniMap(step);
     startBus(step);
+    if (step.type === "bus") healthDone.then(() => startRide7(step));
     $("#arrow").parentElement.classList.toggle("reduce", state.reduce);
     const arrive = btn(step.type === "bus" ? "🚌 버스에서 내렸어요" : "📍 여기에 도착했어요 · 다음", "btn-xl btn-primary", () => nextOutdoor());
     dock.replaceChildren(arrive, row(replayBtn(), helpBtn()));
@@ -1814,7 +1816,7 @@
   // ───────────────────────── 화면 이동 공통 (돌아갈 곳 기억) ─────────────────────────
   const backOf = {};
   function openScreen(name) {
-    if (state.screen !== name) backOf[name] = ["lang", "taxi", "plan", "where", "stops", "inside"].includes(state.screen) ? (backOf[state.screen] || "home") : state.screen;
+    if (state.screen !== name) backOf[name] = ["lang", "taxi", "plan", "where", "stops", "inside", "ride"].includes(state.screen) ? (backOf[state.screen] || "home") : state.screen;
     ["#settings", "#sos", "#helpCard"].forEach(id => { const el = $(id); if (el) el.hidden = true; });
     const gs = $("#gSheet"); if (gs) gs.remove();
     go(name);
@@ -2178,7 +2180,8 @@
     [/이전|뒤로|돌아가/, () => cmdBack()],
     [/여기.*어디|어디야|어디예요|어디에요|사진/, () => openScreen("where")],
     [/택시/, () => openScreen("taxi")],
-    [/정류장|버스\s*(정보|어디|타는|번호)|몇\s*번\s*버스/, () => { STOPS.sel = null; openScreen("stops"); }],
+    [/지하철|전철|역\s*출구|몇\s*번\s*출구|역\s*엘리베이터/, () => { SUB.sel = null; STOPS.tab = "sub"; openScreen("stops"); }],
+    [/정류장|버스\s*(정보|어디|타는|번호)|몇\s*번\s*버스/, () => { STOPS.sel = null; STOPS.tab = "bus"; openScreen("stops"); }],
     [/화장실/, () => { openScreen("inside"); setTimeout(() => showPlace("toilet"), 300); }],
     [/수납|돈\s*내|원무과/, () => { openScreen("inside"); setTimeout(() => showPlace("pay"), 300); }],
     [/엘리베이터|승강기/, () => { openScreen("inside"); setTimeout(() => showPlace("elevator"), 300); }],
@@ -2268,14 +2271,14 @@
         <button class="tile" data-go="plan">⏰<span>몇 시에 나갈까</span></button>
         <button class="tile" data-go="doctor">🩺<span>진료 메모</span></button>
         <button class="tile" data-go="guardian">👪<span>${gN ? `보호자 ${gN}명` : "보호자 등록"}</span></button>
-        <button class="tile" data-go="stops">🚏<span>버스 정류장</span></button>
+        <button class="tile" data-go="stops">🚏<span>버스·지하철</span></button>
         <button class="tile" data-go="inside">🏥<span>병원 안 안내</span></button>
       </div>
       <button class="btn btn-light more-btn" id="moreTools">☰ 다른 도움 더 보기 <small>택시 · 여기가 어디 · 외국어·필담</small></button>`;
     main.querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
       const k = b.dataset.go;
       if (k === "near") openNear("hosp"); else if (k === "doctor") openDoctor(); else if (k === "guardian") openGuardian();
-      else if (k === "stops") { STOPS.sel = null; openScreen("stops"); } else openScreen(k);
+      else if (k === "stops") { STOPS.sel = null; STOPS.tab = "bus"; openScreen("stops"); } else openScreen(k);
     });
     const pb = $("#planBanner"); if (pb) pb.onclick = () => openScreen("plan");
     const rs = $("#resume"); if (rs) rs.onclick = () => go(trip);
@@ -2299,7 +2302,8 @@
       ["⏰", "몇 시에 나갈까", () => openScreen("plan")],
       ["🩺", "진료 메모", () => openDoctor()],
       ["👪", "보호자", () => openGuardian()],
-      ["🚏", "버스 정류장", () => { STOPS.sel = null; openScreen("stops"); }],
+      ["🚏", "버스 정류장", () => { STOPS.sel = null; STOPS.tab = "bus"; openScreen("stops"); }],
+      ["🚇", "지하철역", () => { SUB.sel = null; STOPS.tab = "sub"; openScreen("stops"); }],
       ["🏥", "병원 안 안내", () => openScreen("inside")],
       ["🚕", "택시 타기", () => openScreen("taxi")],
       ["📷", "여기가 어디?", () => openScreen("where")],
@@ -2496,22 +2500,47 @@
   const STOPS = { list: [], sel: null, timer: null, said: {} };
   const CROWD = ["", "여유", "보통", "혼잡", "매우 혼잡"];
   function renderStops() {
-    setStep("🚏 버스 정류장 안내", STOPS.sel ? STOPS.sel.name : "내 주변 정류장");
+    const tab = STOPS.tab || "bus";
     clearInterval(STOPS.timer);
-    if (!busAvailable()) {
-      main.innerHTML = `
-        <section class="card warn-card"><p class="big" style="font-size:24px">실시간 버스 정보를 아직 못 써요</p>
-          <p style="margin:8px 0 0;font-size:19px">팀에서 받은 <b>‘버스 설정 QR’</b>을 이 휴대폰 카메라로 한 번 찍거나, <b>☰ 메뉴 → 설정</b>에서 버스 정보 키를 넣어 주세요.</p></section>`;
-      dock.replaceChildren(row(btn("⚙︎ 설정 열기", "btn-light", () => openSettings()), backBtnTo("stops")));
-      return speak("실시간 버스 정보를 보려면, 버스 설정 큐알을 찍거나 설정에서 키를 넣어 주세요.");
+    const tabs = `<div class="tabs" role="tablist">
+        <button role="tab" class="tab ${tab === "bus" ? "on" : ""}" data-tab="bus">🚏 버스 정류장</button>
+        <button role="tab" class="tab ${tab === "sub" ? "on" : ""}" data-tab="sub">🚇 지하철역</button></div>`;
+    const bindTabs = () => main.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { STOPS.tab = b.dataset.tab; STOPS.sel = null; SUB.sel = null; renderStops(); });
+    if (tab === "sub") {
+      if (SUB.sel) {
+        const s0 = SUB.sel;
+        setStep("🚇 지하철역 안내", s0.name);
+        main.innerHTML = tabs + `
+          <section class="card"><p class="big" style="font-size:26px">🚇 ${esc(s0.name)}</p>
+            <p class="muted" style="margin-top:4px">${nav.pos ? distText(distanceM(nav.pos, s0)) : ""}${s0.addr ? " · " + esc(s0.addr) : ""}</p></section>
+          <section class="card" id="exitBox"><p class="muted">출구·엘리베이터를 찾는 중…</p></section>
+          <p class="sign" style="font-size:18px">♿ 보행기·휠체어는 <b>엘리베이터</b>로 다니세요. 실시간 열차 도착 시간은 역 안 전광판을 봐 주세요.</p>`;
+        bindTabs();
+        dock.replaceChildren(btn("🧭 이 역까지 길 안내", "btn-xl btn-primary", () => { state.dest = { name: s0.name, lat: s0.lat, lng: s0.lng }; state.outIdx = 0; save(); go("outdoor"); }),
+          row(btn("🙋 역무원에게 묻기", "btn-help", () => staffCard("엘리베이터가 있는 출구가 어디예요?")), btn("⬅ 다른 역", "btn-light", () => { SUB.sel = null; renderStops(); })));
+        if (SUB.exits) paintExits(); else loadExits();
+        return;
+      }
+      setStep("🚇 지하철역 안내", "가까운 역");
+      main.innerHTML = tabs + `
+        <section class="card"><p class="big" style="font-size:26px">가까운 지하철역</p>
+          <p class="muted" style="margin-top:6px">역을 누르면 출구 번호와 엘리베이터를 알려 드려요.</p></section>
+        <div id="subList" class="near-list"><p class="muted">역을 찾는 중…</p></div>
+        <p class="muted" style="font-size:15px">자료: OpenStreetMap</p>`;
+      bindTabs();
+      dock.replaceChildren(row(btn("🔄 다시 찾기", "btn-light", () => renderStops()), backBtnTo("stops")));
+      loadSubway();
+      return;
     }
-    if (STOPS.sel) return renderStopDetail();
-    main.innerHTML = `
-      <section class="card"><p class="big" style="font-size:26px">가까운 버스 정류장</p>
-        <p class="muted" style="margin-top:6px">정류장을 누르면 지금 오는 버스를 알려 드려요.</p></section>
+    setStep("🚏 버스 정류장 안내", STOPS.sel ? STOPS.sel.name : "내 주변 정류장");
+    if (STOPS.sel) { main.innerHTML = tabs; bindTabs(); return renderStopDetail(); }
+    main.innerHTML = tabs + `
+      ${busRealtime() ? "" : `<section class="card warn-card"><p style="margin:0;font-size:18px">ℹ️ 지금은 정류장 위치만 보여요. <b>실시간 버스 도착</b>은 팀에서 받은 ‘버스 설정 QR’을 한 번 찍거나 ⚙︎ 설정에 버스 키를 넣으면 보여요.</p></section>`}
+      <div id="curStop"></div>
       <div id="stopMap" class="map mini"></div>
       <div id="stopList" class="near-list"><p class="muted">정류장을 찾는 중…</p></div>
-      <p class="muted" style="font-size:15px">자료: 경기도 버스정보</p>`;
+      <p class="muted" style="font-size:15px">자료: ${busRealtime() ? "경기도 버스정보" : "OpenStreetMap"}</p>`;
+    bindTabs();
     dock.replaceChildren(row(btn("🔄 다시 찾기", "btn-light", () => renderStops()), backBtnTo("stops")));
     loadStops();
   }
@@ -2525,7 +2554,7 @@
     list.forEach(s => { s.d = distanceM(p, s); });
     list.sort((a, b) => a.d - b.d);
     STOPS.list = list.slice(0, 10);
-    if (!STOPS.list.length) { box.innerHTML = `<p class="muted">가까운 정류장이 없어요. (약 200m 안)</p>`; return speak("가까운 정류장을 찾지 못했어요."); }
+    if (!STOPS.list.length) { box.innerHTML = `<p class="muted">가까운 정류장이 없어요. (약 ${busRealtime() ? 200 : 400}m 안)</p>`; return speak("가까운 정류장을 찾지 못했어요."); }
     box.innerHTML = "";
     STOPS.list.forEach((s, i) => {
       const b = btn(`<span class="near-no">${i + 1}</span><span class="stop-txt"><b>${esc(s.name)}</b><small>${distText(s.d)}${s.no ? ` · 정류장 번호 ${esc(s.no)}` : ""}</small></span><span class="stop-go">›</span>`, "btn-light stop-item", () => { STOPS.sel = s; renderStops(); });
@@ -2539,22 +2568,34 @@
       m.fitBounds(L.latLngBounds([[p.lat, p.lng], ...STOPS.list.slice(0, 5).map(s => [s.lat, s.lng])]).pad(0.2));
     }
     const f = STOPS.list[0];
-    speak(`가장 가까운 정류장은 ${f.name}이에요. ${distSpeech(f.d).replace(" 남았어요", "")} 거리예요. 정류장을 누르면 오는 버스를 알려 드려요.`);
+    // 정류장 바로 앞(약 60m 안)이면 '지금 계신 정류장'으로 알려 줌
+    if (f.d < 60 + Math.min(nav.acc || 0, 30)) {
+      const cs = $("#curStop");
+      if (cs) {
+        cs.innerHTML = `<section class="card cur-stop"><p class="muted" style="margin:0">📍 지금 계신 정류장</p><p class="big" style="font-size:26px">🚏 ${esc(f.name)}</p>${f.no ? `<p class="muted" style="margin:2px 0 0">정류장 번호 ${esc(f.no)}</p>` : ""}</section>`;
+        cs.querySelector(".cur-stop").append(btn(busRealtime() ? "🚌 지금 오는 버스 보기" : "🧭 정류장 안내 보기", "btn-primary", () => { STOPS.sel = f; renderStops(); }));
+      }
+      return speak(`지금 ${f.name} 정류장에 계세요.${busRealtime() ? " 지금 오는 버스 보기를 누르세요." : ""}`);
+    }
+    speak(`가장 가까운 정류장은 ${f.name}이에요. ${distSpeech(f.d).replace(" 남았어요", "")} 거리예요. 정류장을 누르면 ${busRealtime() ? "오는 버스를" : "길을"} 알려 드려요.`);
   }
   function renderStopDetail() {
     const s = STOPS.sel;
     STOPS.said = {};
-    main.innerHTML = `
+    const rt = busRealtime() && s.id;
+    main.insertAdjacentHTML("beforeend", `
       <section class="card">
         <p class="big" style="font-size:26px">🚏 ${esc(s.name)}</p>
         <p class="muted" style="margin-top:4px">${nav.pos ? distText(distanceM(nav.pos, s)) + " · " : ""}${s.no ? "정류장 번호 " + esc(s.no) : ""}</p>
       </section>
-      <section class="card" id="arrBox" aria-live="polite"><p class="muted">오는 버스를 알아보는 중…</p></section>
-      <p class="muted" style="font-size:15px">경기도 버스정보 · 30초마다 새로고침 · ♿ 저상버스는 보행기·휠체어로 타기 편해요</p>`;
+      ${rt ? `<section class="card" id="arrBox" aria-live="polite"><p class="muted">오는 버스를 알아보는 중…</p></section>
+      <p class="muted" style="font-size:15px">경기도 버스정보 · 30초마다 새로고침 · <b>버스 번호를 누르면</b> 내릴 곳까지 몇 정거장 남았는지 알려 드려요 · ♿ 저상버스</p>`
+      : `<section class="card warn-card"><p style="margin:0;font-size:18px">실시간 도착 정보는 ‘버스 설정 QR’을 찍으면 보여요. 지금은 정류장까지 길 안내를 할 수 있어요.</p></section>`}`);
     dock.replaceChildren(
       btn("🧭 이 정류장까지 길 안내", "btn-xl btn-primary", () => { state.dest = { name: s.name + " 정류장", lat: s.lat, lng: s.lng }; state.outIdx = 0; save(); go("outdoor"); }),
       row(btn("🔊 다시 듣기", "btn-light", () => sayArrivals(true)), btn("⬅ 다른 정류장", "btn-light", () => { STOPS.sel = null; renderStops(); }))
     );
+    if (!rt) return speak(`${s.name} 정류장이에요. 길 안내 버튼을 누르면 정류장까지 안내해 드려요.`);
     loadArrivals();
     STOPS.timer = setInterval(() => { if (state.screen === "stops" && STOPS.sel) loadArrivals(); else clearInterval(STOPS.timer); }, 30000);
   }
@@ -2570,12 +2611,16 @@
       const hosp = /병원|의료원|보건소/.test(x.dest);
       const b1 = x.buses[0], b2 = x.buses[1];
       const when = b => !b ? "" : `${b.min <= 1 ? "<b class='soon'>곧 도착</b>" : `<b>${b.min}분</b>`}${b.stops ? ` · ${b.stops}정거장 전` : ""}${b.low ? " · <span class='low'>♿</span>" : ""}${b.crowded ? ` · ${CROWD[b.crowded] || ""}` : ""}`;
-      return `<div class="arr-row ${hosp ? "hosp" : ""}">
+      return `<div class="arr-row ${hosp ? "hosp" : ""}" role="button" tabindex="0" data-route="${esc(String(x.routeId))}">
         <div class="arr-no">${esc(x.routeName)}</div>
         <div class="arr-info"><div>${b1 ? when(b1) : "<span class='muted'>지금 오는 차 없음</span>"}</div>
           ${b2 ? `<small>다음: ${when(b2)}</small>` : ""}
           <small class="muted">→ ${esc(x.dest)}${hosp ? " 🏥" : ""}</small></div></div>`;
     }).join("");
+    box.querySelectorAll("[data-route]").forEach(el => el.onclick = () => {
+      const route = rows.find(x => String(x.routeId) === el.dataset.route);
+      if (route) openRide(STOPS.sel, route);
+    });
     sayArrivals();
   }
   function sayArrivals(force) {
@@ -2690,6 +2735,199 @@
     speak(`${p.t}. ${p.steps ? p.steps.join(". ") : p.say}`);
   }
 
+  // ───────────────────────── 대중교통: 키 없이 쓰는 지도 자료 ─────────────────────────
+  const busRealtime = () => !!busKey() || busBase() !== null;
+  async function photonReverse(p, tag, km, limit = 20) {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch(`https://photon.komoot.io/reverse?lat=${p.lat}&lon=${p.lng}&radius=${km}&limit=${limit}&osm_tag=${tag}`, { signal: ctl.signal });
+      if (!r.ok) throw new Error("photon");
+      return (await r.json()).features.map(f => ({ name: f.properties.name || "", lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], props: f.properties }));
+    } finally { clearTimeout(tm); }
+  }
+  async function overpass(q) {
+    for (const u of ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]) {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 12000);
+      try {
+        const r = await fetch(u, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ctl.signal });
+        if (r.ok) return await r.json();
+      } catch {} finally { clearTimeout(tm); }
+    }
+    throw new Error("overpass");
+  }
+  // 키가 없으면 지도 자료로 정류장만이라도 보여 줌 (실시간 도착 X)
+  const _busStopsNear = busStopsNear;
+  busStopsNear = async function (p) {
+    if (busRealtime()) return _busStopsNear(p);
+    return (await photonReverse(p, "highway:bus_stop", 0.4)).filter(s => s.name).map(s => ({ id: null, name: s.name, no: "", lat: s.lat, lng: s.lng }));
+  };
+
+  // ───────────────────────── 🚌 버스 탄 뒤: 지금 정류장 · 내릴 곳까지 몇 정거장 ─────────────────────────
+  async function routeStations(routeId) {
+    if (busKey()) return arr((await gbis("busrouteservice/v2/getBusRouteStationListv2", { routeId })).busRouteStationList)
+      .map(s => ({ seq: +s.stationSeq, id: s.stationId, name: s.stationName, lat: +s.y, lng: +s.x })).sort((a, b) => a.seq - b.seq);
+    const r = await fetch(`${busBase()}api/route?routeId=${routeId}`); if (!r.ok) throw new Error("route");
+    return (await r.json()).items || [];
+  }
+  // 위치로 노선 위 '지금 정류장' 찾기 (앞으로만 나아감)
+  function rideProgress(T, p) {
+    const from = Math.max(T.boardIdx, T.curIdx);
+    let best = -1, bestD = Infinity;
+    for (let i = from; i <= T.alightIdx; i++) { const d = distanceM(p, T.st[i]); if (d < bestD) { bestD = d; best = i; } }
+    if (best >= 0 && bestD < 150) T.curIdx = best;               // 정류장 근처면 그 정류장
+    else if (best > T.curIdx && bestD < 400) T.curIdx = best - 1; // 정류장 사이면 바로 앞 정류장을 지난 걸로
+    return { cur: T.st[T.curIdx], next: T.st[Math.min(T.curIdx + 1, T.alightIdx)], left: T.alightIdx - T.curIdx, atAlight: distanceM(p, T.st[T.alightIdx]) < 90 };
+  }
+  function rideSpeak(T, pr) {
+    if (pr.left === T.saidLeft && !(pr.atAlight && !T.saidArrive)) return;
+    T.saidLeft = pr.left;
+    if (pr.atAlight || pr.left <= 0) { if (!T.saidArrive) { T.saidArrive = true; vibrate([300, 100, 300, 100, 300]); speak(`${T.st[T.alightIdx].name}이에요. 지금 내리세요. 버스가 완전히 멈추면 천천히 내리세요.`); } return; }
+    if (pr.left === 1) { vibrate([200, 100, 200]); speak(`다음 정류장은 ${pr.next.name}, 내리실 곳이에요. 하차 벨을 누르고, 버스가 멈추면 내리세요.`); return; }
+    speak(`지금 ${pr.cur.name}이에요. 내리실 곳까지 ${pr.left}정거장 남았어요.`);
+  }
+  function rideCardHTML(T, pr) {
+    return `<p class="bus-title">🚌 ${esc(T.routeName)}번 타고 가는 중</p>
+      <p class="ride-left">${pr.left <= 0 ? "🛑 지금 내리세요!" : pr.left === 1 ? "🔔 다음 정류장에서 내려요" : `내릴 곳까지 <b>${pr.left}정거장</b>`}</p>
+      <p class="bus-row">📍 지금: <b>${esc(pr.cur.name)}</b>${pr.left > 0 ? `<br>➡️ 다음: <b>${esc(pr.next.name)}</b>` : ""}</p>
+      <p class="bus-row">🏁 내릴 곳: <b>${esc(T.st[T.alightIdx].name)}</b></p>`;
+  }
+  // 길안내 7-1번 단계 안에서 쓰는 추적기
+  const RIDE7 = { T: null, timer: null };
+  async function startRide7(step) {
+    clearInterval(RIDE7.timer);
+    const card = $("#rideCard"); if (!card || !step.bus || !busRealtime()) return;
+    try {
+      const st = await routeStations(step.bus.routeId);
+      const b = st.findIndex(s => String(s.id) === String(step.bus.stationId)), a = st.findIndex(s => String(s.id) === String(step.bus.alightStationId));
+      if (b < 0 || a < 0) return;
+      RIDE7.T = { routeName: step.bus.routeName, st, boardIdx: b, alightIdx: a, curIdx: b, saidLeft: null, saidArrive: false };
+    } catch { return; }
+    const tick = () => {
+      const c = $("#rideCard"); if (!c || state.screen !== "outdoor") return clearInterval(RIDE7.timer);
+      if (!nav.pos) return;
+      const T = RIDE7.T, board = T.st[T.boardIdx];
+      if (distanceM(nav.pos, board) < 120 && T.curIdx === T.boardIdx) { c.hidden = true; return; }   // 아직 타는 곳
+      const pr = rideProgress(T, nav.pos);
+      c.innerHTML = rideCardHTML(T, pr); c.hidden = false;
+      rideSpeak(T, pr);
+    };
+    tick(); RIDE7.timer = setInterval(tick, 4000);
+  }
+
+  // 정류장에서 고른 버스를 타고 갈 때 (아무 노선이나)
+  const RIDE = { T: null, watch: null, timer: null };
+  async function openRide(stop, route) {
+    let st;
+    try { st = await routeStations(route.routeId); } catch { return speak("이 버스의 정류장 목록을 가져오지 못했어요.", { force: true }); }
+    // 같은 정류장이 두 번(가는 길·오는 길) 나오면 행선지 쪽으로 가는 첫 번째
+    const b = st.findIndex(s => String(s.id) === String(stop.id));
+    if (b < 0) return speak("이 정류장을 노선에서 찾지 못했어요.", { force: true });
+    RIDE.T = { routeName: route.routeName, dest: route.dest, st, boardIdx: b, alightIdx: Math.min(b + 1, st.length - 1), curIdx: b, saidLeft: null, saidArrive: false, picking: true };
+    openScreen("ride");
+  }
+  function renderRide() {
+    const T = RIDE.T;
+    if (!T) return go("stops");
+    clearInterval(RIDE.timer);
+    if (T.picking) {
+      setStep(`🚌 ${T.routeName}번`, "어디서 내리세요?");
+      const after = T.st.slice(T.boardIdx + 1, T.boardIdx + 40);
+      main.innerHTML = `<section class="card"><p class="big" style="font-size:26px">어디서 내리세요?</p>
+          <p class="muted" style="margin-top:4px">내릴 정류장을 누르면, 가는 동안 몇 정거장 남았는지 알려 드려요.</p></section>
+        <div class="near-list" id="alightList"></div>`;
+      const box = $("#alightList");
+      after.forEach((s, k) => {
+        const hosp = /병원|의료원|보건소/.test(s.name);
+        box.append(btn(`<span class="near-no">${k + 1}</span><span class="stop-txt"><b>${esc(s.name)}${hosp ? " 🏥" : ""}</b><small>${k + 1}정거장 뒤</small></span>`, "btn-light stop-item" + (hosp ? " hosp" : ""), () => {
+          T.alightIdx = T.boardIdx + 1 + k; T.picking = false; renderRide();
+        }));
+      });
+      dock.replaceChildren(backBtnTo("ride"));
+      return speak("어디서 내리실지 정류장을 눌러 주세요. 병원 정류장은 병원 표시가 있어요.");
+    }
+    setStep(`🚌 ${T.routeName}번 타고 가는 중`, "");
+    main.innerHTML = `<section class="card bus-card" id="rideBox" aria-live="polite"></section>
+      <ol class="ride-list" id="rideList"></ol>
+      <p class="muted" style="font-size:15px">위치(GPS)로 지금 정류장을 알아내요. 위치가 약하면 아래 ‘한 정거장 지났어요’를 눌러 주세요.</p>`;
+    const paint = () => {
+      const p = nav.pos;
+      const pr = p ? rideProgress(T, p) : { cur: T.st[T.curIdx], next: T.st[Math.min(T.curIdx + 1, T.alightIdx)], left: T.alightIdx - T.curIdx, atAlight: false };
+      $("#rideBox").innerHTML = rideCardHTML(T, pr);
+      $("#rideList").innerHTML = T.st.slice(T.boardIdx, T.alightIdx + 1).map((s, k) => {
+        const i = T.boardIdx + k;
+        return `<li class="${i < T.curIdx ? "done" : i === T.curIdx ? "cur" : ""} ${i === T.alightIdx ? "goal" : ""}">${i === T.curIdx ? "🚌 " : i === T.alightIdx ? "🏁 " : ""}${esc(s.name)}</li>`;
+      }).join("");
+      rideSpeak(T, pr);
+    };
+    if ("geolocation" in navigator && RIDE.watch == null)
+      RIDE.watch = navigator.geolocation.watchPosition(pp => { nav.pos = { lat: pp.coords.latitude, lng: pp.coords.longitude }; nav.acc = pp.coords.accuracy; if (state.screen === "ride") paint(); }, () => {}, { enableHighAccuracy: true, maximumAge: 3000 });
+    paint(); RIDE.timer = setInterval(() => { if (state.screen === "ride") paint(); else { clearInterval(RIDE.timer); if (RIDE.watch != null) { navigator.geolocation.clearWatch(RIDE.watch); RIDE.watch = null; } } }, 5000);
+    dock.replaceChildren(
+      btn("🛑 내렸어요", "btn-xl btn-primary", () => { clearInterval(RIDE.timer); if (RIDE.watch != null) { navigator.geolocation.clearWatch(RIDE.watch); RIDE.watch = null; } speak("잘 내리셨어요.", { force: true }); RIDE.T = null; go("home"); }),
+      row(btn("➕ 한 정거장 지났어요", "btn-light", () => { T.curIdx = Math.min(T.curIdx + 1, T.alightIdx); paint(); }), btn("🔁 내릴 곳 바꾸기", "btn-light", () => { T.picking = true; renderRide(); }))
+    );
+  }
+
+  // ───────────────────────── 🚇 지하철역 안내 ─────────────────────────
+  const SUB = { list: [], sel: null, exits: null };
+  async function loadSubway() {
+    const box = $("#subList");
+    let p = nav.pos; if (!p) { await requestLocation(); p = nav.pos; }
+    if (!p) { box.innerHTML = `<div class="sign">📍 위치를 알 수 없어요. 위치를 켜 주세요.</div>`; return; }
+    let raw;
+    try { raw = await photonReverse(p, "railway:station", 3, 30); } catch { box.innerHTML = `<p class="muted">역 정보를 가져오지 못했어요. 인터넷을 확인해 주세요.</p>`; return; }
+    // 같은 역(노선마다 따로 있는 점)은 하나로
+    const out = [];
+    raw.filter(s => s.name).forEach(s => {
+      const nm = /역$/.test(s.name) ? s.name : s.name + "역";
+      const same = out.find(o => o.name === nm && distanceM(o, s) < 400);
+      if (!same) out.push({ name: nm, lat: s.lat, lng: s.lng, addr: [s.props.district, s.props.street].filter(Boolean).join(" ") });
+    });
+    out.forEach(s => { s.d = distanceM(p, s); }); out.sort((a, b) => a.d - b.d);
+    SUB.list = out.slice(0, 6);
+    if (!SUB.list.length) { box.innerHTML = `<p class="muted">3km 안에 지하철역이 없어요.</p>`; return speak("가까운 지하철역이 없어요."); }
+    box.innerHTML = "";
+    SUB.list.forEach((s, i) => box.append(btn(`<span class="near-no sub">${i + 1}</span><span class="stop-txt"><b>🚇 ${esc(s.name)}</b><small>${distText(s.d)}${s.addr ? " · " + esc(s.addr) : ""}</small></span><span class="stop-go">›</span>`, "btn-light stop-item", () => { SUB.sel = s; SUB.exits = null; renderStops(); })));
+    const f = SUB.list[0];
+    speak(f.d < 150 ? `지금 ${f.name} 근처에 계세요. 역을 누르면 출구와 엘리베이터를 알려 드려요.` : `가장 가까운 지하철역은 ${f.name}이에요. ${distSpeech(f.d).replace(" 남았어요", "")} 거리예요.`);
+  }
+  async function loadExits() {
+    const s = SUB.sel, box = $("#exitBox");
+    try {
+      const j = await overpass(`[out:json][timeout:12];(node["railway"="subway_entrance"](around:450,${s.lat},${s.lng});node["highway"="elevator"](around:350,${s.lat},${s.lng}););out;`);
+      const ex = [], el = [];
+      j.elements.forEach(e => {
+        const t = e.tags || {}, it = { lat: e.lat, lng: e.lon, ref: t.ref || (t.name || "").replace(/[^0-9-]/g, ""), name: t.name || "", wheel: t.wheelchair, level: t.level };
+        (t.railway === "subway_entrance" ? ex : el).push(it);
+      });
+      ex.sort((a, b) => (parseInt(a.ref) || 99) - (parseInt(b.ref) || 99));
+      SUB.exits = { ex, el };
+    } catch { SUB.exits = { failed: true }; }
+    paintExits();
+  }
+  function paintExits() {
+    const box = $("#exitBox"); if (!box) return;
+    const E = SUB.exits;
+    if (!E) { box.innerHTML = `<p class="muted">출구·엘리베이터를 찾는 중…</p>`; return; }
+    const go2 = (name, lat, lng) => { state.dest = { name, lat, lng }; state.outIdx = 0; save(); go("outdoor"); };
+    if (E.failed || (!E.ex.length && !E.el.length)) {
+      box.innerHTML = `<p class="muted">이 역의 출구·엘리베이터 위치 정보를 가져오지 못했어요.</p>
+        <p class="sign">🪧 역 안에서는 <b>‘엘리베이터’</b>, <b>‘교통약자 엘리베이터’</b> 표지판을 따라가세요. 보행기·휠체어는 계단 대신 꼭 엘리베이터를 쓰세요.</p>`;
+      return;
+    }
+    const near = nav.pos;
+    const ord = (a) => near ? a.slice().sort((x, y) => distanceM(near, x) - distanceM(near, y)) : a;
+    box.innerHTML = `
+      ${E.el.length ? `<p class="sum-title" style="font-size:20px">🛗 엘리베이터 (${E.el.length})</p>` : ""}
+      <div class="exit-list" id="elList"></div>
+      ${E.ex.length ? `<p class="sum-title" style="font-size:20px;margin-top:10px">🚪 출구 (${E.ex.length})</p>` : ""}
+      <div class="exit-list" id="exList"></div>`;
+    ord(E.el).slice(0, 6).forEach(e => $("#elList").append(btn(`🛗 ${esc(e.name || "엘리베이터")}${near ? ` <small>${distText(distanceM(near, e))}</small>` : ""}`, "btn-light exit-item", () => go2(`${SUB.sel.name} 엘리베이터`, e.lat, e.lng))));
+    ord(E.ex).forEach(e => $("#exList").append(btn(`🚪 ${e.ref ? esc(e.ref) + "번 출구" : esc(e.name || "출구")}${e.wheel === "yes" ? " ♿" : ""}${near ? ` <small>${distText(distanceM(near, e))}</small>` : ""}`, "btn-light exit-item", () => go2(`${SUB.sel.name} ${e.ref ? e.ref + "번 출구" : "출구"}`, e.lat, e.lng))));
+    const el0 = ord(E.el)[0];
+    speak(el0 && near ? `가장 가까운 엘리베이터는 ${distSpeech(distanceM(near, el0)).replace(" 남았어요", "")} 거리예요. 누르면 길을 안내해 드려요.` : `${SUB.sel.name} 출구 ${E.ex.length}개를 찾았어요. 누르면 길을 안내해 드려요.`);
+  }
+
   // ───────────────────────── 렌더 ─────────────────────────
   function render() {
     document.body.classList.toggle("reduce", state.reduce);
@@ -2701,7 +2939,7 @@
     if (maps.pick) { maps.pick.remove(); maps.pick = null; }
     if (maps.mini) { maps.mini.remove(); maps.mini = null; }
     if (maps.near) { maps.near.remove(); maps.near = null; }
-    ({ stops: renderStops, inside: renderInside, mictest: renderMicTest, home: renderHome, lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderHome)();
+    ({ ride: renderRide, stops: renderStops, inside: renderInside, mictest: renderMicTest, home: renderHome, lang: renderLang, taxi: renderTaxi, plan: renderPlan, where: renderWhere, guardian: renderGuardian, near: renderNear, doctor: renderDoctor, perm: renderPerm, pick: renderPick, talk: renderTalk, confirm: renderConfirm, apply: renderApply, outdoor: renderOutdoor, indoor: renderIndoor, done: renderDone }[state.screen] || renderHome)();
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function resetAll() {

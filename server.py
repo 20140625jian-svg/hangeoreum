@@ -147,6 +147,19 @@ def bus_stops(lat, lng):
              "lat": float(x.get("y")), "lng": float(x.get("x")), "d": x.get("distance")} for x in rows]
 
 
+def route_stations(route_id):
+    """경기도 버스정보: 노선이 서는 정류장 순서"""
+    qs = urllib.parse.urlencode({"serviceKey": DATA_KEY, "routeId": route_id, "format": "json"})
+    with urllib.request.urlopen(f"{GBIS}/busrouteservice/v2/getBusRouteStationListv2?{qs}", timeout=15, context=SSL_CTX) as r:
+        j = json.loads(r.read())
+    rows = (j.get("response", {}).get("msgBody") or {}).get("busRouteStationList") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    out = [{"seq": int(x.get("stationSeq")), "id": x.get("stationId"), "name": x.get("stationName"),
+            "lat": float(x.get("y")), "lng": float(x.get("x"))} for x in rows]
+    return sorted(out, key=lambda x: x["seq"])
+
+
 def hhmm(v):
     return f"{v[:2]}:{v[2:]}" if v and len(v) == 4 and v.isdigit() else ""
 
@@ -203,6 +216,17 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(200, {"ai": bool(KEY), "tts": bool(KEY), "data": bool(DATA_KEY), "bus": bool(DATA_KEY)})
         if self.path.startswith("/api/near"):
             return self.near()
+        if self.path.startswith("/api/route"):
+            if not DATA_KEY:
+                return self._json(503, {"error": "DATA_GO_KR_KEY 없음"})
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            rid = q.get("routeId", [""])[0]
+            if not rid.isdigit():
+                return self._json(400, {"error": "routeId 필요"})
+            try:
+                return self._json(200, {"items": route_stations(rid)})
+            except Exception as e:  # noqa: BLE001
+                return self._json(502, {"error": str(e)[:200]})
         if self.path.startswith("/api/stops"):
             if not DATA_KEY:
                 return self._json(503, {"error": "DATA_GO_KR_KEY 없음"})
