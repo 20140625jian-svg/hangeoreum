@@ -318,3 +318,17 @@ html.big-text .stepbar { font-size: 22px; }
 .suggest-item:last-child { border-bottom: 0; }
 .suggest-item small { color: var(--muted); font-weight: 500; font-size: 16px; margin-left: 6px; }
 .home-search input { font-size: 21px; }
+
+/* 큰 "말씀하세요" 화면 */
+.listen-sheet { background: #0a2a22; color: #fff; display: grid; place-items: center; padding: 20px; z-index: 70; }
+.listen-sheet[hidden] { display: none; }
+.ls-inner { width: 100%; max-width: 560px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.ls-prompt { font-size: 22px; line-height: 1.5; margin: 0; white-space: pre-line; color: #d9efe7; }
+.ls-mic { width: 150px; height: 150px; border-radius: 50%; display: grid; place-items: center; font-size: 72px; background: #ffcf3f; color: #2a2000; }
+.ls-mic.on { animation: lsPulse 1.3s infinite; background: #ff5a4a; }
+@keyframes lsPulse { 0% { box-shadow: 0 0 0 0 rgba(255,90,74,.6); } 70% { box-shadow: 0 0 0 34px rgba(255,90,74,0); } 100% { box-shadow: 0 0 0 0 rgba(255,90,74,0); } }
+.reduce .ls-mic.on { animation: none; }
+.ls-state { font-size: 30px; font-weight: 900; margin: 0; }
+.ls-text { font-size: 28px; font-weight: 700; margin: 0; min-height: 1.5em; line-height: 1.45; color: #fff7d6; word-break: keep-all; }
+.ls-btns { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.ls-btns .btn-light { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.35); }

@@ -135,36 +135,91 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   // 말하기: 브라우저 음성 인식 → 안 되면 휴대폰 키보드의 🎤(받아쓰기)로 대신 입력
   let activeRec = null;
-  function listen(onText, btn, opts = {}) {
-    if (activeRec) { activeRec.stop(); return; }           // 한 번 더 누르면 멈춤
+  // 말하기 시작 알림음 ("띵") — 언제 말하면 되는지 소리로 알려 줌
+  let beepCtx = null;
+  function beep(freq = 880, ms = 140) {
+    try {
+      beepCtx = beepCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = beepCtx.createOscillator(), g = beepCtx.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(beepCtx.destination);
+      const t = beepCtx.currentTime; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+      o.start(t); o.stop(t + ms / 1000 + 0.02);
+    } catch {}
+  }
+  // 큰 "말씀하세요" 화면
+  function listenSheet(prompt) {
+    let el = $("#listenSheet");
+    if (!el) {
+      el = document.createElement("div"); el.id = "listenSheet"; el.className = "overlay listen-sheet"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-live", "polite");
+      el.innerHTML = `<div class="ls-inner">
+        <p class="ls-prompt" id="lsPrompt"></p>
+        <div class="ls-mic" id="lsMic" aria-hidden="true">🎙</div>
+        <p class="ls-state" id="lsState">말씀하세요</p>
+        <p class="ls-text" id="lsText"></p>
+        <div class="ls-btns" id="lsBtns"></div>
+      </div>`;
+      document.body.append(el);
+    }
+    el.hidden = false;
+    $("#lsPrompt").textContent = prompt || "";
+    return el;
+  }
+  function closeListenSheet() { const el = $("#listenSheet"); if (el) el.hidden = true; }
+
+  // 말 듣기
+  //  · 누르면 바로 큰 화면 + 띵 소리 → 말하면 글자가 바로 보임
+  //  · 말하다가 잠깐 쉬어도(약 3초까지) 끊지 않고 이어서 들음
+  //  · 다 말하면 "다 말했어요", 아무 말도 없으면 "다시 말하기" 버튼
+  function listen(onText, trigger, opts = {}) {
+    if (activeRec) { activeRec.finish(); return; }          // 듣는 중에 한 번 더 누르면 끝
     if (!SR || !isSecureContext || inApp) {
       const adv = browserAdvice();
       return typeFallback(onText, adv ? adv.msg : "이 브라우저는 바로 듣기를 지원하지 않아요.", { openBrowser: !!(adv && adv.btn), openLabel: adv && adv.btn });
     }
     stopSpeaking();
-    const label = btn.dataset.label || (btn.dataset.label = btn.innerHTML);
-    let rec;
-    try { rec = new SR(); } catch { return typeFallback(onText); }
-    rec.lang = "ko-KR"; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
-    let text = "", errored = "", silenceT = null, gotAny = false;
-    const maxT = setTimeout(() => rec.stop(), 15000);
-    const armSilence = () => { clearTimeout(silenceT); silenceT = setTimeout(() => rec.stop(), 2200); };
-    btn.classList.add("listening"); btn.innerHTML = "🎙 듣고 있어요… 말씀하세요<br><small>다 말하면 다시 누르세요</small>";
-    rec.onstart = () => vibrate(40);
-    rec.onresult = (e) => {
-      let t = ""; for (const r of e.results) t += r[0].transcript;
-      text = t; gotAny = true; armSilence();
-      const q = $("#heardLive"); if (q) { q.hidden = false; q.textContent = "“" + t + "”"; }
+    const big = !opts.quiet;                                   // 자동 듣기·마이크 시험은 큰 화면 없이
+    const label = trigger ? (trigger.dataset.label || (trigger.dataset.label = trigger.innerHTML)) : "";
+    const PAUSE_OK = 3200, FIRST_WAIT = 10000, MAX = 30000;   // 어르신 말 속도에 맞춘 넉넉한 시간
+    const S = { parts: [], cur: "", startedAt: Date.now(), lastSpeech: 0, done: false, cancelled: false, errored: "", rec: null, restarts: 0, timer: null };
+    const fullText = () => (S.parts.join(" ") + " " + S.cur).replace(/\s+/g, " ").trim();
+    const paint = () => {
+      const t = fullText();
+      const q = $("#heardLive"); if (q && t) { q.hidden = false; q.textContent = "“" + t + "”"; }
+      if (big) { $("#lsText").textContent = t ? "“" + t + "”" : ""; $("#lsState").textContent = t ? "듣고 있어요… 다 말하면 기다리세요" : "말씀하세요"; }
     };
-    rec.onerror = (e) => { errored = e.error || "error"; };
-    rec.onend = () => {
-      activeRec = null; clearTimeout(maxT); clearTimeout(silenceT);
-      btn.classList.remove("listening"); btn.innerHTML = label;
-      if (text.trim()) return onText(text.trim());
-      if (errored === "not-allowed" || errored === "service-not-allowed") {
+    const setBtns = (mode) => {
+      if (!big) return;
+      const b = $("#lsBtns"); b.innerHTML = "";
+      if (mode === "listening") {
+        b.append(btn("✅ 다 말했어요", "btn-xl btn-primary", () => api.finish()), btn("✖ 그만", "btn-light", () => api.cancel()));
+      } else if (mode === "nothing") {
+        b.append(btn("🎙 다시 말하기", "btn-xl btn-talk", () => { closeListenSheet(); listen(onText, btn_, opts); }),
+          btn("⌨️ 글자로 쓰기", "btn-light", () => { closeListenSheet(); typeFallback(onText); }), btn("✖ 닫기", "btn-light", () => closeListenSheet()));
+      }
+    };
+    const btn_ = trigger;
+    const uiOn = () => {
+      if (trigger) { trigger.classList.add("listening"); trigger.innerHTML = "🎙 듣고 있어요…"; }
+      if (big) { listenSheet(opts.prompt); $("#lsMic").classList.add("on"); paint(); setBtns("listening"); }
+    };
+    const uiOff = () => {
+      if (trigger) { trigger.classList.remove("listening"); trigger.innerHTML = label; }
+      if (big) $("#lsMic").classList.remove("on");
+    };
+    const end = () => {
+      clearInterval(S.timer); activeRec = null; uiOff();
+      const t = fullText();
+      if (S.cancelled) { closeListenSheet(); return; }
+      if (t) {
+        listen.miss = 0;
+        if (big) { $("#lsState").textContent = "✅ 이렇게 들었어요"; $("#lsBtns").innerHTML = ""; beep(660, 120); setTimeout(closeListenSheet, 900); }
+        return onText(t);
+      }
+      const er = S.errored;
+      if (er === "not-allowed" || er === "service-not-allowed") {
+        closeListenSheet();
         if (opts.quiet) {
-          if (opts.onDenied) return opts.onDenied(errored);
-          // ‘말로만 하기’ 자동 듣기가 막힌 경우 (아이폰은 누를 때만 듣게 할 때가 있음)
+          if (opts.onDenied) return opts.onDenied(er);
           if (typeof setHandsfree === "function" && HF.on) { HF.on = false; store.set("handsfree", false); fab.classList.remove("hf"); }
           return speak(isIOS ? "아이폰에서는 말할 때마다 오른쪽 아래 마이크 버튼을 눌러 주세요." : "마이크가 막혀 있어요. 메뉴의 마이크 시험에서 고칠 수 있어요.");
         }
@@ -173,18 +228,56 @@
         speak(why + " 마이크 고치는 방법을 볼 수 있어요.");
         return typeFallback(onText, why, { fixMic: true });
       }
-      if (errored === "audio-capture") { speak("다른 앱이 마이크를 쓰고 있어요."); return typeFallback(onText, "다른 앱이 마이크를 쓰고 있어요. 통화나 녹음을 끄고 다시 해 보세요."); }
-      if (errored === "network" || errored === "language-not-supported") return typeFallback(onText, "인터넷이 약해서 바로 듣기가 안 돼요.");
-      if (errored === "aborted") return;
-      if (opts.quiet && (errored === "no-speech" || !errored)) { if (opts.onIdle) opts.onIdle(); return; }
-      // no-speech 또는 아무 말도 못 들음
-      speak("잘 안 들렸어요. 노란 버튼을 누르고, 휴대폰에 입을 가까이 대고 말씀해 주세요.");
-      if (!gotAny) listen.miss = (listen.miss || 0) + 1;
-      if (listen.miss >= 2) { listen.miss = 0; typeFallback(onText, "잘 안 들려서 다른 방법으로 해 볼게요."); }
+      if (er === "audio-capture") { closeListenSheet(); speak("다른 앱이 마이크를 쓰고 있어요."); return typeFallback(onText, "다른 앱이 마이크를 쓰고 있어요. 통화나 녹음을 끄고 다시 해 보세요."); }
+      if (er === "network" || er === "language-not-supported") { closeListenSheet(); return typeFallback(onText, "인터넷이 약해서 바로 듣기가 안 돼요."); }
+      if (opts.quiet) { if (opts.onIdle) opts.onIdle(); return; }
+      // 아무 말도 못 들음 → 큰 화면에서 바로 다시
+      listen.miss = (listen.miss || 0) + 1;
+      $("#lsState").textContent = "잘 안 들렸어요";
+      $("#lsText").textContent = listen.miss >= 2 ? "휴대폰을 입 가까이 대고, 조금 크게 말씀해 보세요. 글자로 써도 돼요." : "‘다시 말하기’를 누르고 말씀해 주세요.";
+      setBtns("nothing");
+      speak("잘 안 들렸어요. 다시 말하기를 누르고, 휴대폰에 입을 가까이 대고 말씀해 주세요.", { force: true });
     };
-    activeRec = rec;
-    try { rec.start(); silenceT = setTimeout(() => rec.stop(), 7000); }
-    catch { activeRec = null; btn.classList.remove("listening"); btn.innerHTML = label; typeFallback(onText); }
+    const startOne = () => {
+      let rec;
+      try { rec = new SR(); } catch { S.errored = "error"; return end(); }
+      rec.lang = "ko-KR"; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
+      rec.onresult = (e) => {
+        let t = ""; for (const r of e.results) t += r[0].transcript;
+        S.cur = t; S.lastSpeech = Date.now(); paint();
+      };
+      rec.onerror = (e) => { if (e.error !== "no-speech" && e.error !== "aborted") S.errored = e.error || "error"; };
+      rec.onend = () => {
+        if (S.cur.trim()) S.parts.push(S.cur.trim()); S.cur = "";
+        if (S.done || S.cancelled || S.errored) return end();
+        const now = Date.now(), heard = S.parts.length > 0;
+        // 말하다 잠깐 쉰 거면, 혹은 아직 첫 말을 기다리는 중이면 이어서 듣기
+        const keep = heard ? now - S.lastSpeech < PAUSE_OK : now - S.startedAt < FIRST_WAIT;
+        if (keep && now - S.startedAt < MAX && S.restarts < 12) {
+          S.restarts++;
+          try { startOne(); return; } catch { /* 다시 켜기가 막힌 휴대폰은 여기서 끝 */ }
+        }
+        end();
+      };
+      S.rec = rec;
+      rec.start();
+    };
+    const api = {
+      finish() { S.done = true; try { S.rec && S.rec.stop(); } catch { end(); } },
+      cancel() { S.cancelled = true; try { S.rec && S.rec.abort(); } catch { end(); } },
+      stop() { api.finish(); }, abort() { api.cancel(); }
+    };
+    activeRec = api;
+    uiOn();
+    try { startOne(); } catch { activeRec = null; uiOff(); closeListenSheet(); return typeFallback(onText); }
+    beep(); vibrate(40);
+    // 지켜보기: 말이 끝나고 조용하면 마무리, 너무 오래 아무 말 없으면 마무리
+    S.timer = setInterval(() => {
+      const now = Date.now(), heard = S.parts.length > 0 || S.cur.trim();
+      if ((heard && S.lastSpeech && now - S.lastSpeech > PAUSE_OK) || (!heard && now - S.startedAt > FIRST_WAIT) || now - S.startedAt > MAX) {
+        clearInterval(S.timer); S.done = true; try { S.rec && S.rec.stop(); } catch { end(); }
+      }
+    }, 300);
   }
 
   // 대체 입력: 휴대폰 키보드의 🎤 버튼(받아쓰기)은 거의 모든 휴대폰에서 됩니다
@@ -293,6 +386,23 @@
   $("#helpClose").onclick = () => { $("#helpCard").hidden = true; };
 
   // ───────────────────────── 화면 1: 말하기 ─────────────────────────
+  // "병원 가는 길 시작": 화면을 열면서 바로 듣기 (한 번만 누르면 됨)
+  const TALK_PROMPT = "어느 병원에 가세요?\n예) “분당서울대병원 처음 가요. 보행기 써요”";
+  function startTalk() {
+    go("talk");
+    const tb = dock.querySelector(".btn-talk");
+    listen(handleUtterance, tb, { prompt: TALK_PROMPT });
+  }
+  // 처음 화면에서 아무 말이나: 명령 → 병원 가기 → 병원 찾기 순서로 알아듣기
+  function homeVoice(t) {
+    const tt = t.replace(/\s+/g, " ");
+    if (CMD.find(([re]) => re.test(tt)) && !/가요|갈래|가야|가려/.test(tt)) return runCommand(t);
+    if (/분당\s*서울대|서울대|보행기|휠체어|처음\s*가|접수|동행|병원\s*(가|에\s*가)/.test(tt)) { go("talk"); return handleUtterance(t); }
+    const d = deptQuery(t);
+    if (d) return openNear("hosp", d);
+    if (/병원|의원|약국|치과|한의원|보건소/.test(tt)) return openNear("hosp", tt.replace(/(에\s*)?(가고\s*싶어요?|가요|갈래요?|찾아\s*줘|찾아\s*주세요|어디\s*있어요?|어디예요)\s*$/, "").trim());
+    return runCommand(t);
+  }
   function renderTalk() {
     setStep("1. 방문 준비", "말로 알려 주세요");
     main.innerHTML = `
@@ -310,7 +420,7 @@
       </section>`;
     main.append(btn("⬅ 처음 화면", "btn-light", () => go("home")));
     main.querySelectorAll("[data-q]").forEach(b => b.onclick = () => handleUtterance(b.dataset.q));
-    const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk));
+    const talk = btn("🎙 누르고 말하기", "btn-xl btn-talk", () => listen(handleUtterance, talk, { prompt: TALK_PROMPT }));
     dock.replaceChildren(talk, row(btn("⌨️ 키보드로 말하기", "btn-light", () => typeFallback(handleUtterance)), btn("✋ 직접 고르기", "btn-light", () => { go("confirm"); })));
     speak("노란 버튼을 누르고, 어느 병원에 가시는지 편하게 말씀해 주세요.");
   }
@@ -2113,7 +2223,7 @@
   const fab = document.createElement("button");
   fab.id = "fab"; fab.className = "fab"; fab.setAttribute("aria-label", "말로 하기"); fab.innerHTML = "🎙";
   document.body.append(fab);
-  fab.onclick = () => listen(runCommand, fab);
+  fab.onclick = () => listen(runCommand, fab, { prompt: "무엇을 도와드릴까요?\n예) “다 왔어요” · “버스 언제 와” · “도와줘”" });
   new ResizeObserver(() => document.documentElement.style.setProperty("--dockH", dock.offsetHeight + "px")).observe(dock);
   // 계속 듣기: 안내 말이 끝나면 자동으로 다시 들음
   const HF = { on: store.get("handsfree", false), busy: false };
@@ -2163,8 +2273,9 @@
     const rs = $("#resume"); if (rs) rs.onclick = () => go(trip);
     $("#moreTools").onclick = openMenu;
     $("#homeSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#homeQ").value.trim(); if (q) openNear("hosp", deptQuery(q) || q); else openNear("hosp"); };
-    dock.replaceChildren(btn("🚶 병원 가는 길 시작", "btn-xl btn-talk", () => go("talk")));
-    speak(trip ? "안녕하세요. 하던 길 안내를 이어서 하시려면 초록 테두리 버튼을 누르세요." : "안녕하세요. 병원 한걸음이에요. 병원에 가시려면 아래 노란 버튼을 누르세요.");
+    const talkNow = btn("🎙 눌러서 말하기", "btn-xl btn-talk", () => listen(homeVoice, talkNow, { prompt: "무엇을 도와드릴까요?\n예) “분당서울대병원 가요” · “근처 약국” · “택시 불러 줘”" }));
+    dock.replaceChildren(talkNow, btn("🚶 병원 가는 길 시작", "btn-light", () => startTalk()));
+    speak(trip ? "안녕하세요. 하던 길 안내를 이어서 하시려면 초록 테두리 버튼을 누르세요." : "안녕하세요. 병원 한걸음이에요. 아래 노란 버튼을 누르고 편하게 말씀하세요.");
   }
 
   // ☰ 메뉴: 자주 안 쓰는 기능은 여기로 모음
@@ -2175,7 +2286,7 @@
     wrap.innerHTML = `<div class="sheet-inner"><p class="big" style="font-size:24px">무엇이 필요하세요?</p><div class="tiles menu-tiles"></div></div>`;
     const items = [
       ["🏠", "처음 화면", () => go("home")],
-      ["🚶", "병원 가는 길", () => go(tripInProgress() || "talk")],
+      ["🚶", "병원 가는 길", () => tripInProgress() ? go(tripInProgress()) : startTalk()],
       ["🏥", "병원 찾기·응급실", () => openNear("hosp")],
       ["⏰", "몇 시에 나갈까", () => openScreen("plan")],
       ["🩺", "진료 메모", () => openDoctor()],
